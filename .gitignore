@@ -1,0 +1,23 @@
+# Environment / secrets
+.env
+
+# Databases
+*.sqlite
+
+# PR Sentinel runtime
+.sentinel/
+
+# Python
+__pycache__/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Evals
+evals/results/
+
+# Build artifacts
+dist/
+build/
