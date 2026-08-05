@@ -1,0 +1,49 @@
+# Paths whose contents are never sent to the model (CLAUDE.md: honoured everywhere).
+
+# Lockfiles
+*.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+poetry.lock
+uv.lock
+Cargo.lock
+Gemfile.lock
+composer.lock
+go.sum
+
+# Minified / bundled assets
+*.min.js
+*.min.css
+*.bundle.js
+*.map
+
+# Vendored / third-party
+vendor/
+third_party/
+node_modules/
+
+# Generated code
+*_pb2.py
+*.pb.go
+*.generated.*
+dist/
+build/
+
+# Binaries / media
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.pdf
+*.zip
+*.gz
+*.woff
+*.woff2
+*.ttf
+*.so
+*.dll
+*.dylib
+*.class
+*.jar
