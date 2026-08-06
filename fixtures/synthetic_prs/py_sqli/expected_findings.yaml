@@ -1,0 +1,14 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; for Phase 5 this documents what a correct review of
+# fixtures/synthetic_prs/py_sqli/diff.patch must catch.
+findings:
+  - rule_id: CWE-89
+    file: app/db.py
+    line_start: 12
+    line_end: 13
+    severity: critical
+    description: >
+      search_users_by_email builds a SQL query by string-concatenating
+      email_fragment directly into a LIKE clause instead of using a parameter
+      placeholder, then executes it. A crafted email_fragment containing a SQL
+      metacharacter (e.g. "%' OR '1'='1") escapes the intended query.

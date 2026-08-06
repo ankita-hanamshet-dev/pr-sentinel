@@ -406,6 +406,24 @@ def test_all_banned_phrases_are_flagged() -> None:
         assert check_comment_tone(f"prefix {phrase} suffix") != []
 
 
+def test_check_comment_tone_flags_author_reference_when_author_given() -> None:
+    violations = check_comment_tone("alice's change here is unsafe", author="alice")
+    assert any("references the PR author" in v for v in violations)
+
+
+def test_check_comment_tone_author_reference_is_case_insensitive() -> None:
+    violations = check_comment_tone("Alice's change here is unsafe", author="alice")
+    assert any("references the PR author" in v for v in violations)
+
+
+def test_check_comment_tone_no_author_reference_when_not_mentioned() -> None:
+    assert check_comment_tone("this change is unsafe", author="alice") == []
+
+
+def test_check_comment_tone_author_none_skips_the_check() -> None:
+    assert check_comment_tone("alice's change here is unsafe") == []
+
+
 def test_check_patch_safety_workflow_path() -> None:
     reasons = check_patch_safety(".github/workflows/ci.yml", "name: CI")
     assert any("workflow" in r for r in reasons)

@@ -27,6 +27,7 @@ dev = [
     "pytest-httpx>=0.30",
     "ruff>=0.6",
     "mypy>=1.11",
+    "types-PyYAML>=6",
 ]
 
 [build-system]
@@ -46,14 +47,22 @@ select = ["E", "F", "I", "B", "UP", "W"]
 extend-select = ["E722"]
 
 [tool.mypy]
-python_version = "3.11"
+# NOTE: python_version here governs mypy's own stub-parsing capability, not the
+# project's runtime target (requires-python stays >=3.11 everywhere else, including
+# ruff's target-version). numpy>=2.3's bundled __init__.pyi (a transitive dep via
+# rank-bm25) uses PEP 695 `type X = ...` syntax, which mypy only parses when
+# python_version >= 3.12 -- with 3.11 set, mypy fails with a hard parse error before
+# any per-module override (ignore_missing_imports/follow_imports/ignore_errors) can
+# even apply, since packages that ship their own py.typed marker (numpy, rapidfuzz)
+# are always fully parsed regardless of follow_imports=skip.
+python_version = "3.12"
 strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-# Third-party deps without usable stubs. follow_imports=skip stops mypy from
-# parsing their sources (e.g. tiktoken statically imports numpy, whose stub uses
-# 3.12-only syntax and breaks a 3.11 target).
+# rank_bm25/tiktoken/langgraph ship no usable stubs at all; ignore_missing_imports
+# covers them. numpy/rapidfuzz ship real (py.typed) stubs so follow_imports=skip is
+# a no-op for them in practice, but is kept for documentation/intent.
 module = [
     "rank_bm25",
     "rank_bm25.*",
@@ -63,6 +72,8 @@ module = [
     "langgraph.*",
     "numpy",
     "numpy.*",
+    "rapidfuzz",
+    "rapidfuzz.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

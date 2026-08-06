@@ -130,8 +130,14 @@ BANNED_PHRASES: tuple[str, ...] = (
 )
 
 
-def check_comment_tone(body: str) -> list[str]:
-    """Flag banned phrases (case-insensitive) and exclamation marks in a comment body."""
+def check_comment_tone(body: str, *, author: str | None = None) -> list[str]:
+    """Flag banned phrases, exclamation marks, and (if given) the PR author's name.
+
+    CLAUDE.md: critique the code, never the author. `author` is optional because
+    it isn't always known at the point a comment is drafted; pass it whenever the
+    PR author's username/display name is available so a direct reference is caught
+    deterministically rather than relying on prompt instructions alone.
+    """
     violations: list[str] = []
     lowered = body.lower()
     for phrase in BANNED_PHRASES:
@@ -139,6 +145,8 @@ def check_comment_tone(body: str) -> list[str]:
             violations.append(f"banned phrase: {phrase!r}")
     if "!" in body:
         violations.append("exclamation marks are not allowed")
+    if author and author.lower() in lowered:
+        violations.append(f"references the PR author ({author!r}) -- critique code, not authors")
     return violations
 
 

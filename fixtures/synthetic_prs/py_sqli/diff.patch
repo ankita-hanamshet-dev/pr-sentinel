@@ -1,0 +1,18 @@
+diff --git a/app/db.py b/app/db.py
+index bdd2579..6f53ca3 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -7,6 +7,13 @@ def get_user_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+     return cursor.fetchone()
+ 
+ 
++def search_users_by_email(conn: sqlite3.Connection, email_fragment: str) -> list[sqlite3.Row]:
++    cursor = conn.cursor()
++    query = "SELECT * FROM users WHERE email LIKE '%" + email_fragment + "%'"
++    cursor.execute(query)
++    return cursor.fetchall()
++
++
+ def list_active_sessions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+     cursor = conn.cursor()
+     cursor.execute("SELECT * FROM sessions WHERE active = 1")

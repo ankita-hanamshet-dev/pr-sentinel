@@ -1,0 +1,22 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: app/db.py
+    line_start: 6
+    line_end: 6
+    pattern: 'cursor.execute("SELECT * FROM users WHERE name = ?", (name,))'
+    why_not_a_finding: >
+      get_user_by_name uses a parameterized query (the "?" placeholder with a
+      separate params tuple) -- this is unchanged, pre-existing, correct code. A
+      naive grep for "cursor.execute(" would flag every execute() call
+      regardless of whether it's parameterized; a real security review must
+      distinguish this from the genuinely vulnerable concatenation below it.
+  - file: app/db.py
+    line_start: 18
+    line_end: 18
+    pattern: 'cursor.execute("SELECT * FROM sessions WHERE active = 1")'
+    why_not_a_finding: >
+      list_active_sessions' query string is a fixed literal with no
+      user-controlled input anywhere in it -- there is nothing to inject.
+      Unchanged, pre-existing, correct code included only as surrounding
+      context in this hunk.
