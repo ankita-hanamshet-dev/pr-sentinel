@@ -133,5 +133,6 @@ def redact_request(
         user=user_result.text,
         max_output_tokens=request.max_output_tokens,
         temperature=request.temperature,
+        cache_system=request.cache_system,
     )
     return safe_request, findings

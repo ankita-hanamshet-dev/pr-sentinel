@@ -192,3 +192,23 @@ jobs:
             --check-run-id "${{ needs.start.outputs.check_run_id }}" \
             --details-url "${PUBLISH_RUN_URL}" \
             --summary "The review could not be completed (aggregate produced no payload)."
+      - name: Step summary — findings, real USD (standard rates), cache hit/write
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## PR Sentinel — publish"
+            if [ -f review-payload.json ]; then
+              uv run python - <<'PY'
+          import json
+          r = json.load(open("review-payload.json"))
+          print(f"score **{r['score']:.0f}/100**, {len(r['findings'])} findings, "
+                f"needs_human_review={r['needs_human_review']}")
+          print()
+          print(f"cost **${r.get('cost_usd', 0):.4f}** at standard claude-sonnet-5 rates "
+                f"($3/$15 per 1M) · cache {r.get('cache_hits', 0)} hit / "
+                f"{r.get('cache_writes', 0)} write · agent_errors={list(r['agent_errors'])}")
+          PY
+            else
+              echo "no payload — the Check Run was marked failed (review could not complete)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -33,6 +33,54 @@ def _anthropic_json(text: str, tokens_in: int, tokens_out: int) -> dict[str, obj
     }
 
 
+def test_anthropic_marks_system_cacheable_only_when_requested(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(url=ANTHROPIC_URL, json=_anthropic_json("a", 1, 1))
+    httpx_mock.add_response(url=ANTHROPIC_URL, json=_anthropic_json("b", 1, 1))
+    provider = AnthropicProvider(model="claude-sonnet-5", api_key="sk")
+
+    provider.complete(LLMRequest(system="rules", user="u", max_output_tokens=8, cache_system=True))
+    provider.complete(LLMRequest(system="rules", user="u", max_output_tokens=8))
+    reqs = httpx_mock.get_requests()
+    cached_body = json.loads(reqs[0].content)
+    plain_body = json.loads(reqs[1].content)
+    assert cached_body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert plain_body["system"] == "rules"  # no cache_control on single-call agents
+
+
+def test_anthropic_reports_cache_tokens(httpx_mock: HTTPXMock) -> None:
+    payload = _anthropic_json("pong", 3, 2)
+    usage = payload["usage"]
+    assert isinstance(usage, dict)
+    usage["cache_read_input_tokens"] = 1800
+    usage["cache_creation_input_tokens"] = 0
+    httpx_mock.add_response(url=ANTHROPIC_URL, json=payload)
+    provider = AnthropicProvider(model="claude-sonnet-5", api_key="sk")
+
+    req = LLMRequest(system="s", user="u", max_output_tokens=8, cache_system=True)
+    resp = provider.complete(req)
+    assert resp.cache_read_tokens == 1800
+    assert resp.cache_write_tokens == 0
+
+
+def test_governor_counts_a_cache_hit(httpx_mock: HTTPXMock) -> None:
+    payload = _anthropic_json("pong", 3, 2)
+    usage = payload["usage"]
+    assert isinstance(usage, dict)
+    usage["cache_read_input_tokens"] = 1800
+    httpx_mock.add_response(url=ANTHROPIC_URL, json=payload)
+    settings = Settings(llm_provider="anthropic", model="claude-sonnet-5", llm_api_key="sk")
+    governor = BudgetGovernor(settings)
+    call_llm(
+        AnthropicProvider(model="claude-sonnet-5", api_key="sk"),
+        LLMRequest(system="s", user="u", max_output_tokens=8, cache_system=True),
+        cache=None, governor=governor, provider_name="anthropic",
+        model="claude-sonnet-5", prompt_version="v1", agent="bug",
+    )
+    snap = governor.snapshot()
+    assert snap["cache_hits"] == 1
+    assert snap["cache_writes"] == 0
+
+
 def test_anthropic_retries_on_429_then_succeeds(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(url=ANTHROPIC_URL, status_code=429, headers={"retry-after": "0"})
     httpx_mock.add_response(url=ANTHROPIC_URL, json=_anthropic_json("pong", 5, 2))

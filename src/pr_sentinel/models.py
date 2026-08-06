@@ -113,3 +113,8 @@ class ReviewReport(BaseModel):
     needs_human_review: bool = False
     prompt_versions: dict[str, str] = Field(default_factory=dict)
     duration_ms: int = 0
+    # Cost/cache observability (item 5): real USD at STANDARD rates, summed across the
+    # specialist jobs and the critic; cache hit/write counts from prompt caching.
+    cost_usd: float = 0.0
+    cache_hits: int = 0
+    cache_writes: int = 0

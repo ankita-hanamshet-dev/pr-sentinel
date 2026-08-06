@@ -140,7 +140,7 @@ class Agent:
         )
 
     def _call_json(
-        self, schema: type[T], system: str, user: str
+        self, schema: type[T], system: str, user: str, *, cache_system: bool = False
     ) -> tuple[JsonModeResult[T], LLMResponse]:
         return complete_json(
             self.guarded_provider,
@@ -149,6 +149,7 @@ class Agent:
             user=user,
             max_output_tokens=self._max_output_tokens,
             temperature=self.temperature,
+            cache_system=cache_system,
         )
 
     @property
@@ -219,7 +220,9 @@ class ChunkAgent(Agent):
         system = render(self._prompt.system_template, merged_vars)
         user = render(self._prompt.user_template, merged_vars)
 
-        result, response = self._call_json(AgentFindings, system, user)
+        # The system prompt (rules for this language) is identical across every chunk
+        # and the reflection pass within THIS job, so cache it for sequential reuse.
+        result, response = self._call_json(AgentFindings, system, user, cache_system=True)
         outcome.llm_calls += result.attempts
         outcome.tokens_in += response.tokens_in
         outcome.tokens_out += response.tokens_out
@@ -250,7 +253,9 @@ class ChunkAgent(Agent):
             "above. If you cannot find that exact text in the diff, DELETE that finding. "
             "Re-emit only the findings that survive this check, in the same JSON shape."
         )
-        result, response = self._call_json(AgentFindings, system, reflection_user)
+        result, response = self._call_json(
+            AgentFindings, system, reflection_user, cache_system=True
+        )
         outcome.llm_calls += result.attempts
         outcome.tokens_in += response.tokens_in
         outcome.tokens_out += response.tokens_out

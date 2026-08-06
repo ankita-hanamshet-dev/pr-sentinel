@@ -530,6 +530,8 @@ def agent(
     except LLMError as exc:
         errors.append(f"{role} agent inference failed: {exc}")
 
+    snap = governor.snapshot()
+    cost = governor.cost_snapshot()
     _write_json(
         out_path,
         {
@@ -537,11 +539,18 @@ def agent(
             "findings": [f.model_dump(mode="json") for f in findings],
             "errors": errors,
             "injection_detected": injection,
-            "budget_used": governor.snapshot()["calls_used"],
+            "budget_used": snap["calls_used"],
+            "cache_hits": snap["cache_hits"],
+            "cache_writes": snap["cache_writes"],
+            "cost_usd": cost["cost_used_usd"],
             "prompt_version": prompt_version,
         },
     )
-    typer.echo(f"wrote {out_path}: {len(findings)} findings, {len(errors)} errors")
+    typer.echo(
+        f"wrote {out_path}: {len(findings)} findings, {len(errors)} errors, "
+        f"cache {snap['cache_hits']} hit / {snap['cache_writes']} write, "
+        f"${cost['cost_used_usd']:.4f}"
+    )
 
 
 @app.command()
@@ -564,6 +573,9 @@ def aggregate(
     injection = False
     prompt_versions: dict[str, str] = dict(ctx.get("prompt_versions", {}))
     agent_budget = 0
+    agent_cost = 0.0
+    cache_hits = 0
+    cache_writes = 0
     for path in agent_files:
         fp = Path(path)
         if not fp.exists():
@@ -575,6 +587,9 @@ def aggregate(
         injection = injection or bool(result.get("injection_detected"))
         prompt_versions[result["agent"]] = str(result.get("prompt_version", ""))
         agent_budget += int(result.get("budget_used", 0))
+        agent_cost += float(result.get("cost_usd", 0.0))
+        cache_hits += int(result.get("cache_hits", 0))
+        cache_writes += int(result.get("cache_writes", 0))
 
     _settings, provider_obj, governor, _run_id, agent_kwargs = _agent_env(provider or None)
     critic_agent = CriticAgent(provider_obj, **agent_kwargs)  # type: ignore[arg-type]
@@ -601,13 +616,24 @@ def aggregate(
     except LLMError as exc:
         typer.echo(f"LLM call failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    critic_snap = governor.snapshot()
+    total_cost = round(agent_cost + governor.cost_used, 6)
     report = report.model_copy(
-        update={"budget_used": agent_budget + governor.snapshot()["calls_used"]}
+        update={
+            "budget_used": agent_budget + critic_snap["calls_used"],
+            "cost_usd": total_cost,
+            "cache_hits": cache_hits + critic_snap["cache_hits"],
+            "cache_writes": cache_writes + critic_snap["cache_writes"],
+        }
     )
 
     _write_json(out, json.loads(report.model_dump_json()))
     _write_json(DEFAULT_META_PATH, {"pr_number": report.pr_number, "head_sha": report.head_sha})
-    typer.echo(f"wrote {out}: score {report.score:.0f}/100, {len(report.findings)} findings")
+    typer.echo(
+        f"wrote {out}: score {report.score:.0f}/100, {len(report.findings)} findings, "
+        f"${report.cost_usd:.4f} at standard rates, "
+        f"cache {report.cache_hits} hit / {report.cache_writes} write"
+    )
 
 
 @app.command(name="check-start")

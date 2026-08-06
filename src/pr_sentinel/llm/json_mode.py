@@ -44,10 +44,15 @@ def complete_json(
     *,
     max_output_tokens: int,
     temperature: float = 0.0,
+    cache_system: bool = False,
 ) -> tuple[JsonModeResult[T], LLMResponse]:
     """Call `provider`, validate the JSON output against `schema`, repair once."""
     request = LLMRequest(
-        system=system, user=user, max_output_tokens=max_output_tokens, temperature=temperature
+        system=system,
+        user=user,
+        max_output_tokens=max_output_tokens,
+        temperature=temperature,
+        cache_system=cache_system,
     )
     response = provider.complete(request)
     try:
@@ -65,6 +70,7 @@ def complete_json(
         user=repair_user,
         max_output_tokens=max_output_tokens,
         temperature=temperature,
+        cache_system=cache_system,
     )
     repair_response = provider.complete(repair_request)
     try:

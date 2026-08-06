@@ -37,10 +37,22 @@ class AnthropicProvider:
             "anthropic-version": _ANTHROPIC_VERSION,
             "content-type": "application/json",
         }
+        # When the caller marks the system prompt cacheable (sequential same-system
+        # calls within one job), send it as a content block with cache_control so the
+        # 2nd+ calls read the cached prefix at ~0.1x instead of full input price.
+        system: object = request.system
+        if request.cache_system:
+            system = [
+                {
+                    "type": "text",
+                    "text": request.system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
         body: dict[str, object] = {
             "model": self._model,
             "max_tokens": request.max_output_tokens,
-            "system": request.system,
+            "system": system,
             "messages": [{"role": "user", "content": request.user}],
         }
         # `temperature` is rejected outright (400 "deprecated for this model") by
@@ -56,9 +68,18 @@ class AnthropicProvider:
             usage = payload["usage"]
             tokens_in = int(usage["input_tokens"])
             tokens_out = int(usage["output_tokens"])
+            # Cache accounting (absent on providers/models without prompt caching).
+            cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
+            cache_write = int(usage.get("cache_creation_input_tokens", 0) or 0)
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"unexpected Anthropic response shape: {exc}") from exc
 
         return LLMResponse(
-            text=text, tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=0, model=self._model
+            text=text,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=0,
+            model=self._model,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
         )

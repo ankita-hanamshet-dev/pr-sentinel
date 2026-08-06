@@ -41,6 +41,8 @@ class _Ledger:
     tokens_in: int = 0
     tokens_out: int = 0
     cost_used: float = 0.0
+    cache_hits: int = 0  # calls that read a cached prefix
+    cache_writes: int = 0  # calls that wrote a cache entry
 
 
 class BudgetGovernor:
@@ -102,6 +104,10 @@ class BudgetGovernor:
             self._ledger.in_flight -= 1
         self._ledger.tokens_in += tokens_in
         self._ledger.tokens_out += tokens_out
+        if cache_read_tokens > 0:
+            self._ledger.cache_hits += 1
+        if cache_write_tokens > 0:
+            self._ledger.cache_writes += 1
         cost = self._cost(tokens_in, tokens_out, cache_read_tokens, cache_write_tokens)
         self._ledger.cost_used += cost
         logger.info(
@@ -156,6 +162,8 @@ class BudgetGovernor:
             "rpd_used": self._count_within(now, _RPD_WINDOW_S),
             "tokens_in": self._ledger.tokens_in,
             "tokens_out": self._ledger.tokens_out,
+            "cache_hits": self._ledger.cache_hits,
+            "cache_writes": self._ledger.cache_writes,
         }
 
     def _evict_stale(self, now: float) -> None:

@@ -33,12 +33,19 @@ class LLMError(Exception):
 
 @dataclass(frozen=True)
 class LLMRequest:
-    """A single completion request: system + user turns, capped output size."""
+    """A single completion request: system + user turns, capped output size.
+
+    `cache_system` asks a caching-capable provider to mark the (static) system
+    prompt as a cacheable prefix. Set only by callers that issue SEQUENTIAL calls
+    sharing that system within one job (the chunk loop and reflection pass) — not by
+    single-call agents, and never as a prefix shared across the parallel agent jobs.
+    """
 
     system: str
     user: str
     max_output_tokens: int
     temperature: float = 0.0
+    cache_system: bool = False
 
 
 @dataclass(frozen=True)
