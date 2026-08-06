@@ -40,12 +40,13 @@ from pr_sentinel.guardrails.policy import is_ignored_path
 from pr_sentinel.llm.budget import BudgetExhausted, BudgetGovernor
 from pr_sentinel.llm.cache import LLMCache
 from pr_sentinel.llm.provider import LLMError, LLMRequest, call_llm, get_provider
-from pr_sentinel.models import Finding, Hunk, ReviewReport
+from pr_sentinel.models import Finding, Hunk, ReviewReport, TriageFilePlan, TriagePlan
 from pr_sentinel.settings import Settings, get_settings
 
 DEFAULT_PAYLOAD_PATH = "review-payload.json"
 DEFAULT_META_PATH = "pr-meta.json"
 DEFAULT_BUNDLE_PATH = "analysis-bundle.json"
+DEFAULT_CONTEXT_PATH = "context.json"
 
 _CHUNK_AGENT_CLASSES: dict[str, type[ChunkAgent]] = {
     "bug": BugAgent,
@@ -270,30 +271,223 @@ def analyze(
     )
 
 
+def _write_json(path: str, data: object) -> None:
+    Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _run_one_agent(
+    role: str,
+    provider: object,
+    agent_kwargs: dict[str, object],
+    *,
+    triage_plan: TriagePlan,
+    hunks_by_file: dict[str, list[Hunk]],
+    changed_file_paths: frozenset[str],
+) -> tuple[list[Finding], bool, list[str], str]:
+    """Run a SINGLE specialist over the triaged files (one Actions job's worth of work)."""
+    agent = _CHUNK_AGENT_CLASSES[role](provider, **agent_kwargs)  # type: ignore[arg-type]
+    findings: list[Finding] = []
+    errors: list[str] = []
+    injection = False
+    for file_plan in triage_plan.files:
+        if file_plan.skip_reason is not None or role not in file_plan.agents_to_run:
+            continue
+        hunks = hunks_by_file.get(file_plan.file, [])
+        if not hunks:
+            continue
+        for chunk in chunk_hunks(hunks, max_tokens=budget_from_settings()):
+            try:
+                if role == "style":
+                    outcome = agent.review(
+                        chunk, language=file_plan.language, changed_file_paths=changed_file_paths
+                    )
+                else:
+                    outcome = agent.review(chunk, language=file_plan.language)
+            except BudgetExhausted:
+                errors.append("budget exhausted before full coverage")
+                continue
+            findings.extend(outcome.findings)
+            findings.extend(outcome.injection_findings)
+            findings.extend(outcome.redaction_findings)
+            if outcome.injection_findings:
+                injection = True
+            errors.extend(outcome.errors)
+    return findings, injection, errors, agent.prompt_version
+
+
+@app.command()
+def triage(
+    repo: Annotated[str, typer.Option(help="owner/name of the repository")],
+    pr: Annotated[int, typer.Option(help="pull request number")],
+    provider: Annotated[str, typer.Option(help="LLM provider override")] = "",
+    out: Annotated[str, typer.Option(help="context artifact output path")] = DEFAULT_CONTEXT_PATH,
+) -> None:
+    """Fan-out step 1: fetch the PR, run triage, write the shared context artifact."""
+    owner, name = _split_repo(repo)
+    client = GitHubClient(_require_token())
+    try:
+        ctx = fetch_pr_context(client, owner, name, pr)
+    except GitHubError as exc:
+        typer.echo(f"failed to fetch PR: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    settings, provider_obj, _governor, _run_id, agent_kwargs = _agent_env(provider or None)
+    hunks_by_file = ctx.hunks_by_file()
+    all_hunks = [hunk for hunks in hunks_by_file.values() for hunk in hunks]
+    triage_agent = TriageAgent(provider_obj, **agent_kwargs)  # type: ignore[arg-type]
+    try:
+        plan = triage_agent.plan(
+            call_budget=settings.max_llm_calls_per_run,
+            files_summary=ctx.files_summary(),
+            pr_metadata=f"{ctx.title}\n\n{ctx.body}".strip(),
+            ci_results=ctx.ci_summary(),
+            file_paths=list(hunks_by_file),
+            languages=ctx.languages,
+        )
+    except LLMError as exc:
+        typer.echo(f"triage inference failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    _write_json(
+        out,
+        {
+            "pr_number": ctx.number,
+            "head_sha": ctx.head_sha,
+            "model": settings.model,
+            "diff_text": ctx.diff_text,
+            "hunks": [hunk.model_dump(mode="json") for hunk in all_hunks],
+            "changed_lines_by_file": ctx.changed_lines_by_file(),
+            "languages": ctx.languages,
+            "triage": [fp.model_dump(mode="json") for fp in plan.files],
+            "prompt_versions": {"triage": triage_agent.prompt_version},
+            "max_diff_lines": settings.max_diff_lines,
+            "diff_lines": sum(len(hunk.lines) for hunk in all_hunks),
+            "confidence_floor": settings.confidence_floor,
+        },
+    )
+    typer.echo(f"wrote {out}: {len(plan.files)} files triaged, {len(all_hunks)} hunks")
+
+
+@app.command()
+def agent(
+    role: Annotated[str, typer.Option(help="specialist: bug|security|style|improvement")],
+    context: Annotated[
+        str, typer.Option(help="context artifact from triage")
+    ] = DEFAULT_CONTEXT_PATH,
+    provider: Annotated[str, typer.Option(help="LLM provider override")] = "",
+    out: Annotated[str, typer.Option(help="agent result output (default agent-<role>.json)")] = "",
+) -> None:
+    """Fan-out step 2: run ONE specialist over the context; write its result artifact.
+
+    Inference failure is recorded in the result (not a crash) so the fan-in always
+    has four artifacts and errors surface in agent_errors.
+    """
+    if role not in _CHUNK_AGENT_CLASSES:
+        typer.echo(f"unknown role {role!r}", err=True)
+        raise typer.Exit(code=1)
+    out_path = out or f"agent-{role}.json"
+    data = json.loads(Path(context).read_text(encoding="utf-8"))
+    hunks = [Hunk.model_validate(h) for h in data["hunks"]]
+    hunks_by_file: dict[str, list[Hunk]] = {}
+    for hunk in hunks:
+        hunks_by_file.setdefault(hunk.file, []).append(hunk)
+    plan = TriagePlan(files=[TriageFilePlan.model_validate(fp) for fp in data["triage"]])
+
+    _settings, provider_obj, governor, _run_id, agent_kwargs = _agent_env(provider or None)
+    findings: list[Finding] = []
+    errors: list[str] = []
+    injection = False
+    prompt_version = ""
+    try:
+        findings, injection, errors, prompt_version = _run_one_agent(
+            role,
+            provider_obj,
+            agent_kwargs,
+            triage_plan=plan,
+            hunks_by_file=hunks_by_file,
+            changed_file_paths=frozenset(hunks_by_file),
+        )
+    except LLMError as exc:
+        errors.append(f"{role} agent inference failed: {exc}")
+
+    _write_json(
+        out_path,
+        {
+            "agent": role,
+            "findings": [f.model_dump(mode="json") for f in findings],
+            "errors": errors,
+            "injection_detected": injection,
+            "budget_used": governor.snapshot()["calls_used"],
+            "prompt_version": prompt_version,
+        },
+    )
+    typer.echo(f"wrote {out_path}: {len(findings)} findings, {len(errors)} errors")
+
+
 @app.command()
 def aggregate(
-    bundle: Annotated[str, typer.Option(help="analysis bundle input path")] = DEFAULT_BUNDLE_PATH,
+    context: Annotated[
+        str, typer.Option(help="context artifact from triage")
+    ] = DEFAULT_CONTEXT_PATH,
+    agent_result: Annotated[
+        list[str] | None, typer.Option("--agent", help="agent result json (repeatable)")
+    ] = None,
     out: Annotated[str, typer.Option(help="review payload output path")] = DEFAULT_PAYLOAD_PATH,
     provider: Annotated[str, typer.Option(help="LLM provider override")] = "",
 ) -> None:
-    """Merge the analysis bundle through the grounding/critic/scoring pipeline."""
-    bundle_path = Path(bundle)
-    if not bundle_path.exists():
-        typer.echo(f"no bundle found at {bundle_path}", err=True)
-        raise typer.Exit(code=1)
-    data = json.loads(bundle_path.read_text(encoding="utf-8"))
+    """Fan-in: merge the per-agent results through grounding/critic/scoring."""
+    ctx = json.loads(Path(context).read_text(encoding="utf-8"))
+    agent_files = agent_result or sorted(str(p) for p in Path().glob("agent-*.json"))
+
+    raw_findings: list[Finding] = []
+    agent_errors: dict[str, str] = {}
+    injection = False
+    prompt_versions: dict[str, str] = dict(ctx.get("prompt_versions", {}))
+    agent_budget = 0
+    for path in agent_files:
+        fp = Path(path)
+        if not fp.exists():
+            continue
+        result = json.loads(fp.read_text(encoding="utf-8"))
+        raw_findings.extend(Finding.model_validate(f) for f in result.get("findings", []))
+        if result.get("errors"):
+            agent_errors[result["agent"]] = "; ".join(result["errors"])
+        injection = injection or bool(result.get("injection_detected"))
+        prompt_versions[result["agent"]] = str(result.get("prompt_version", ""))
+        agent_budget += int(result.get("budget_used", 0))
 
     _settings, provider_obj, governor, _run_id, agent_kwargs = _agent_env(provider or None)
     critic_agent = CriticAgent(provider_obj, **agent_kwargs)  # type: ignore[arg-type]
+    prompt_versions["critic"] = critic_agent.prompt_version
     try:
-        report = _aggregate_from_bundle(data, critic_agent)
+        report = run_aggregate_pipeline(
+            critic_agent,
+            diff_text=str(ctx.get("diff_text", "")),
+            pr_number=int(ctx["pr_number"]),
+            head_sha=str(ctx["head_sha"]),
+            model=str(ctx["model"]),
+            raw_findings=raw_findings,
+            hunks=[Hunk.model_validate(h) for h in ctx["hunks"]],
+            changed_lines_by_file=dict(ctx.get("changed_lines_by_file", {})),
+            max_diff_lines=int(ctx.get("max_diff_lines", 5000)),
+            diff_lines=int(ctx.get("diff_lines", 0)),
+            confidence_floor=float(ctx.get("confidence_floor", 0.55)),
+            injection_detected=injection,
+            budget_exhausted=False,
+            prompt_versions=prompt_versions,
+            agent_errors=agent_errors,
+            budget_used=agent_budget,
+        )
     except LLMError as exc:
         typer.echo(f"LLM call failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    report = report.model_copy(update={"budget_used": governor.snapshot()["calls_used"]})
+    report = report.model_copy(
+        update={"budget_used": agent_budget + governor.snapshot()["calls_used"]}
+    )
 
-    Path(out).write_text(report.model_dump_json(indent=2), encoding="utf-8")
-    typer.echo(f"wrote {out} (score {report.score:.0f}/100, {len(report.findings)} findings)")
+    _write_json(out, json.loads(report.model_dump_json()))
+    _write_json(DEFAULT_META_PATH, {"pr_number": report.pr_number, "head_sha": report.head_sha})
+    typer.echo(f"wrote {out}: score {report.score:.0f}/100, {len(report.findings)} findings")
 
 
 @app.command()

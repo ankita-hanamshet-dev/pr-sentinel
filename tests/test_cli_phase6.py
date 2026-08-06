@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pytest_httpx import HTTPXMock
 
+import pr_sentinel.cli as cli
 from pr_sentinel.agents.critic import CriticAgent
 from pr_sentinel.cli import _aggregate_from_bundle, publish
 from pr_sentinel.llm.provider import LLMRequest, LLMResponse
@@ -140,3 +141,76 @@ def test_publish_command_reads_payload_and_posts(
     posts = [r for r in httpx_mock.get_requests() if r.url.path.endswith("/reviews")]
     assert len(posts) == 1
     assert json.loads(posts[0].content)["event"] == "COMMENT"
+
+
+def _link_prompts(tmp_path: Path) -> None:
+    """Agents load prompts/ relative to CWD; expose the repo's copy in the temp dir."""
+    (tmp_path / "prompts").symlink_to(Path(__file__).resolve().parent.parent / "prompts")
+
+
+def _context(hunks: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "pr_number": 7, "head_sha": "abc", "model": "m", "diff_text": "d",
+        "hunks": hunks, "changed_lines_by_file": {"app/db.py": 1}, "languages": {},
+        "triage": [], "prompt_versions": {"triage": "1"},
+        "max_diff_lines": 5000, "diff_lines": 3, "confidence_floor": 0.55,
+    }
+
+
+def test_agent_command_writes_artifact_without_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Empty triage -> the specialist has nothing to review -> no LLM call, but the
+    # agent still writes its result artifact (so the fan-in always has four files).
+    monkeypatch.chdir(tmp_path)
+    _link_prompts(tmp_path)
+    monkeypatch.setattr(cli, "get_provider", lambda settings: _ScriptedProvider([]))
+    get_settings.cache_clear()
+    Path("context.json").write_text(json.dumps(_context([])))
+    try:
+        cli.agent(role="bug", context="context.json", provider="", out="agent-bug.json")
+    finally:
+        get_settings.cache_clear()
+    result = json.loads(Path("agent-bug.json").read_text())
+    assert result["agent"] == "bug"
+    assert result["findings"] == []
+    assert result["errors"] == []
+
+
+def test_aggregate_fanin_merges_agents_and_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _link_prompts(tmp_path)
+    kept = json.dumps({"findings": [_finding_json()], "drops": []})
+    monkeypatch.setattr(cli, "get_provider", lambda settings: _ScriptedProvider([kept]))
+    get_settings.cache_clear()
+
+    hunk = Hunk(
+        file="app/db.py", old_start=1, old_len=2, new_start=1, new_len=3,
+        lines=[" import os", "+import sys", " x = 1"],
+    )
+    Path("context.json").write_text(json.dumps(_context([hunk.model_dump(mode="json")])))
+    Path("agent-bug.json").write_text(json.dumps({
+        "agent": "bug", "findings": [{**_finding_json(), "agent": "bug"}], "errors": [],
+        "injection_detected": False, "budget_used": 1, "prompt_version": "1",
+    }))
+    Path("agent-security.json").write_text(json.dumps({
+        "agent": "security", "findings": [_finding_json()],
+        "errors": ["security agent inference failed: boom"],
+        "injection_detected": False, "budget_used": 1, "prompt_version": "1",
+    }))
+    try:
+        cli.aggregate(
+            context="context.json",
+            agent_result=["agent-bug.json", "agent-security.json"],
+            out="review-payload.json",
+            provider="",
+        )
+    finally:
+        get_settings.cache_clear()
+
+    report = json.loads(Path("review-payload.json").read_text())
+    assert Path("pr-meta.json").exists()
+    assert "security" in report["agent_errors"]  # agent error propagated to the report
+    assert len(report["findings"]) >= 1  # grounded + critic-kept

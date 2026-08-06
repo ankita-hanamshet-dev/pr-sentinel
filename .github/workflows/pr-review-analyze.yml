@@ -1,22 +1,26 @@
-# PR Review Analyze — the untrusted-safe half of the split analyse/publish pattern.
-# NO write permissions. Never checks out PR head code (checks out the trusted BASE
-# ref to run the tool; the PR diff is read via the API as untrusted DATA).
+# PR Review Analyze — the untrusted-safe half of the split analyse/publish pattern,
+# as a real Actions-level fan-out/fan-in:
 #
-# DEVIATIONS from CLAUDE.md §Workflows, called out honestly:
-#  - Single `analyze` job, not four parallel agent jobs. The CLI is a single-process
-#    pipeline (triage + 4 specialists + aggregate in one run); a true 4-Actions-job
-#    fan-out needs per-agent CLI entrypoints + per-agent artifacts that Phase 5/6 did
-#    not build. The 4-way parallelism currently lives inside the `analyze` process.
-#  - Provider is Anthropic (secret key), not the retired GitHub Models. The LLM key is
-#    injected below; GitHub WITHHOLDS secrets from fork-triggered pull_request runs, so
-#    this stays fork-safe — on a fork PR the key is empty and inference degrades.
+#   triage ──► agent-bug ─────┐
+#          ├─► agent-security ┤
+#          ├─► agent-style ───┤──► aggregate ──► review-payload.json (+ pr-meta.json)
+#          └─► agent-improvement ┘
+#
+# The four agent jobs run in parallel (needs: [triage], continue-on-error), each
+# records failures in agent_errors, and aggregate fans them in with if: always().
+# NO write permissions anywhere. Never checks out PR head code (checks out the
+# trusted BASE ref; the PR diff is read via the API as untrusted DATA). Reviews
+# pr-sentinel's OWN PRs (github.repository) — no cross-repo, no PAT.
+#
+# The Anthropic key is injected below; GitHub WITHHOLDS secrets from fork-triggered
+# pull_request runs, so on a fork PR the key is empty and inference degrades
+# gracefully (agents record the error; aggregate still produces a report).
 name: PR Review Analyze
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
-# No write scope anywhere in this workflow.
 permissions:
   contents: read
 
@@ -24,17 +28,17 @@ concurrency:
   group: sentinel-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  PR_SENTINEL_LLM_PROVIDER: ${{ vars.PR_SENTINEL_LLM_PROVIDER || 'anthropic' }}
+  PR_SENTINEL_MODEL: ${{ vars.PR_SENTINEL_MODEL || 'claude-sonnet-5' }}
+  PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
+
 jobs:
-  analyze:
+  triage:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      GITHUB_TOKEN: ${{ github.token }} # read-only PR access
-      PR_SENTINEL_LLM_PROVIDER: ${{ vars.PR_SENTINEL_LLM_PROVIDER || 'anthropic' }}
-      PR_SENTINEL_MODEL: ${{ vars.PR_SENTINEL_MODEL || 'claude-sonnet-5' }}
-      # Empty on fork PRs (GitHub withholds secrets) -> graceful degradation.
-      PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
     steps:
       - name: Checkout BASE ref (trusted tool code, NEVER the PR head)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,36 +48,115 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: "3.11"
-      - name: Restore LLM response cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .sentinel/cache.sqlite
           key: sentinel-cache-${{ runner.os }}-${{ hashFiles('prompts/**') }}
       - run: uv sync --frozen
-      - name: Analyze the PR (writes review-payload.json + pr-meta.json; never posts)
+      - name: Triage the PR -> context.json
         run: |
-          uv run pr-sentinel analyze \
+          uv run pr-sentinel triage \
             --repo "${{ github.repository }}" \
             --pr "${{ github.event.pull_request.number }}" \
-            --dry-run
+            --out context.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sentinel-context
+          path: context.json
+          retention-days: 14
+          if-no-files-found: error
+
+  agents:
+    name: agent-${{ matrix.role }}
+    needs: [triage]
+    continue-on-error: true # one crashing specialist cannot sink the run
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [bug, security, style, improvement]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sentinel/cache.sqlite
+          key: sentinel-cache-${{ runner.os }}-${{ hashFiles('prompts/**') }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sentinel-context
+      - run: uv sync --frozen
+      - name: Run the ${{ matrix.role }} specialist -> agent-${{ matrix.role }}.json
+        run: |
+          uv run pr-sentinel agent \
+            --role "${{ matrix.role }}" \
+            --context context.json \
+            --out "agent-${{ matrix.role }}.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: sentinel-agent-${{ matrix.role }}
+          path: agent-${{ matrix.role }}.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  aggregate:
+    needs: [agents]
+    if: always() # fan in even if some agents failed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - name: Download the context artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sentinel-context
+      - name: Download all agent-result artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sentinel-agent-*
+          merge-multiple: true
+      - run: uv sync --frozen
+      - name: Fan in -> review-payload.json + pr-meta.json
+        run: |
+          uv run pr-sentinel aggregate \
+            --context context.json \
+            --agent agent-bug.json \
+            --agent agent-security.json \
+            --agent agent-style.json \
+            --agent agent-improvement.json \
+            --out review-payload.json
       - name: Step summary
         if: always()
         run: |
           {
-            echo "## PR Sentinel — analyze"
+            echo "## PR Sentinel — analyze (fan-out/fan-in)"
             if [ -f review-payload.json ]; then
               uv run python - <<'PY'
           import json
           r = json.load(open("review-payload.json"))
           print(f"score **{r['score']:.0f}/100**, {len(r['findings'])} findings, "
-                f"needs_human_review={r['needs_human_review']}")
+                f"needs_human_review={r['needs_human_review']}, agent_errors={list(r['agent_errors'])}")
           PY
             else
               echo "no payload produced (inference unavailable — e.g. fork PR without secret)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload review payload for the publish workflow
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: review-payload
           path: |
