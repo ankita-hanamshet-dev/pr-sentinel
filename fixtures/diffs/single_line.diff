@@ -1,0 +1,8 @@
+diff --git a/one.py b/one.py
+new file mode 100644
+index 0000000..474d295
+--- /dev/null
++++ b/one.py
+@@ -0,0 +1 @@
++only_line = True
+\ No newline at end of file

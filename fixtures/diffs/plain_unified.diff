@@ -1,0 +1,6 @@
+--- a/plain.py
++++ b/plain.py
+@@ -1,2 +1,3 @@
+ one
++two
+ three

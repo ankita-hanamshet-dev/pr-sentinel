@@ -1,0 +1,8 @@
+diff --git a/newmod.py b/newmod.py
+new file mode 100644
+index 0000000..e42aa4a
+--- /dev/null
++++ b/newmod.py
+@@ -0,0 +1,2 @@
++print("hi")
++print("bye")

@@ -1,0 +1,9 @@
+diff --git a/win.py b/win.py
+index b4ec4d1..dce543a 100644
+--- a/win.py
++++ b/win.py
+@@ -1,3 +1,3 @@
+ alpha
+-beta
++BETA_CHANGED
+ gamma

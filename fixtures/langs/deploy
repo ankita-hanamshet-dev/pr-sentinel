@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+echo "deploying"
+rsync -a ./build/ user@host:/srv/app/

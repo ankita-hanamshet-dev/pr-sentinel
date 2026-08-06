@@ -1,0 +1,9 @@
+diff --git a/tail.py b/tail.py
+index 66a52ee..dbc2711 100644
+--- a/tail.py
++++ b/tail.py
+@@ -1,2 +1,2 @@
+ first
+-second
++second_changed
+\ No newline at end of file

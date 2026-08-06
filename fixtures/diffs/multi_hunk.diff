@@ -1,0 +1,21 @@
+diff --git a/src/util.py b/src/util.py
+index 58e8485..440a85c 100644
+--- a/src/util.py
++++ b/src/util.py
+@@ -1,6 +1,7 @@
+ row_1
+ row_2
+ row_3
++INSERTED_A
+ row_4
+ row_5
+ row_6
+@@ -22,7 +23,7 @@ row_21
+ row_22
+ row_23
+ row_24
+-row_25
++CHANGED_25
+ row_26
+ row_27
+ row_28

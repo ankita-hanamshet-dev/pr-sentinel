@@ -1,0 +1,12 @@
+diff --git a/mod_old.py b/mod_new.py
+similarity index 63%
+rename from mod_old.py
+rename to mod_new.py
+index a9aeef0..fc92969 100644
+--- a/mod_old.py
++++ b/mod_new.py
+@@ -1,3 +1,3 @@
+ a = 1
+-b = 2
++b = 20
+ c = 3

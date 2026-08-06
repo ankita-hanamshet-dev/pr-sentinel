@@ -59,10 +59,13 @@ Create:
 - tests/test_diff.py, tests/test_language.py, tests/test_chunking.py
 The critical test: for a diff containing additions, deletions, and context lines interleaved,
 assert every added line maps to its exact post-image line number. Write this test first.
-Acceptance gate:
+Acceptance gate (use the package/DIRECTORY form for --cov; coverage's `source`
+does not attribute a single-file path under an editable install, and add
+--cov-branch so an unexercised branch under 100% line coverage still shows):
   uv run pytest tests/test_diff.py tests/test_language.py tests/test_chunking.py -q \
-    --cov=src/pr_sentinel/gh/diff.py --cov=src/pr_sentinel/core --cov-report=term-missing
-Require >= 90% coverage on those three modules. Iterate until green.
+    --cov=src/pr_sentinel/gh --cov=src/pr_sentinel/core --cov-branch --cov-report=term-missing
+Require >= 90% coverage on those three modules, and zero partial branches. Iterate until green.
+Also run the independent oracle: uv run python scripts/verify_phase2.py (git-apply ground truth).
 Phase 3 — LLM layer: providers, budget governor, cache, replay
 Build Phase 3: the model layer. Re-read CLAUDE.md constraints C1-C3 first — the rate limits
 drive every design decision here.
@@ -171,6 +174,10 @@ Phase 7 — Workflows
 Build Phase 7: all six GitHub Actions workflows per CLAUDE.md §Workflows.
 Create in .github/workflows/:
 - ci-validation.yml    (name it exactly "CI Validation")
+  NOTE (from Phase 2 verification): add a step to the CI Validation `test` job that runs the
+  Phase 2 diff-parser oracle — `uv run python scripts/verify_phase2.py` — which builds real git
+  patches and checks the parser against `git apply` ground truth. It exits non-zero on any
+  mismatch, so a regression in line-number fidelity fails CI even if the unit tests drift.
 - security-validate.yml (workflow_run on CI Validation, bandit + pip-audit to SARIF)
 - pr-review-analyze.yml (name it exactly "PR Review Analyze")
 - pr-review-publish.yml (workflow_run on PR Review Analyze)

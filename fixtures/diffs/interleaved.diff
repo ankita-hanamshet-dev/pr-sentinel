@@ -1,0 +1,12 @@
+diff --git a/app/calc.py b/app/calc.py
+index a2a5a24..8c23127 100644
+--- a/app/calc.py
++++ b/app/calc.py
+@@ -1,5 +1,5 @@
+ ctx_a
+-kill_1
++ADD_1
+ ctx_b
+-kill_2
++ADD_2
+ ctx_c

@@ -1,0 +1,14 @@
+diff --git a/a.py b/a.py
+index 4a58007..fbbee86 100644
+--- a/a.py
++++ b/a.py
+@@ -1 +1,2 @@
+ alpha
++beta
+diff --git a/b.py b/b.py
+index af17f6c..4dda600 100644
+--- a/b.py
++++ b/b.py
+@@ -1 +1,2 @@
+ gamma
++delta

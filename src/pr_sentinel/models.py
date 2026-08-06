@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, computed_field
 Severity = Literal["critical", "high", "medium", "low"]
 AgentName = Literal["bug", "security", "style", "improvement"]
 Risk = Literal["high", "medium", "low"]
+LineEnding = Literal["lf", "crlf", "mixed", "none"]
 
 SEVERITY_ORDER: dict[str, int] = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
@@ -53,7 +54,11 @@ class Finding(BaseModel):
 
 
 class Hunk(BaseModel):
-    """A unified-diff hunk retaining post-image line numbers for added lines."""
+    """A unified-diff hunk retaining post-image line numbers for added lines.
+
+    `lines` are normalized to LF (any CRLF is stripped); `line_ending` records
+    what the source file actually used so downstream can restore it.
+    """
 
     file: str
     old_start: int
@@ -61,6 +66,7 @@ class Hunk(BaseModel):
     new_start: int
     new_len: int
     lines: list[str] = Field(default_factory=list)
+    line_ending: LineEnding = "lf"
 
 
 class TriageFilePlan(BaseModel):
