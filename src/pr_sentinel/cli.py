@@ -6,6 +6,10 @@ from typing import Annotated, NoReturn
 
 import typer
 
+from pr_sentinel.llm.budget import BudgetExhausted, BudgetGovernor
+from pr_sentinel.llm.provider import LLMError, LLMRequest, call_llm, get_provider
+from pr_sentinel.settings import get_settings
+
 app = typer.Typer(
     name="pr-sentinel",
     no_args_is_help=True,
@@ -64,7 +68,49 @@ def smoke(
     model: Annotated[str, typer.Option(help="model id to exercise")] = "claude-sonnet-5",
 ) -> None:
     """Make one live LLM call to verify provider wiring and the budget ledger."""
-    _pending("smoke", "Phase 3")
+    settings = get_settings()
+    settings = settings.model_copy(update={"model": model})
+    governor = BudgetGovernor(settings)
+
+    try:
+        provider = get_provider(settings)
+    except LLMError as exc:
+        typer.echo(f"provider setup failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    request = LLMRequest(
+        system="You are a smoke test.",
+        user="Reply with the single word: pong",
+        max_output_tokens=16,
+    )
+
+    try:
+        response = call_llm(
+            provider,
+            request,
+            cache=None,
+            governor=governor,
+            provider_name=settings.llm_provider,
+            model=settings.model,
+            prompt_version="smoke-v1",
+            agent="smoke",
+        )
+    except BudgetExhausted as exc:
+        typer.echo(f"budget exhausted: {exc.reason}", err=True)
+        raise typer.Exit(code=1) from exc
+    except LLMError as exc:
+        typer.echo(f"LLM call failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    snapshot = governor.snapshot()
+    typer.echo(f"response: {response.text!r}")
+    typer.echo(
+        f"tokens_in={response.tokens_in} tokens_out={response.tokens_out} "
+        f"latency_ms={response.latency_ms}"
+    )
+    typer.echo(
+        f"budget: {snapshot['calls_used']}/{settings.max_llm_calls_per_run} calls used this run"
+    )
 
 
 @app.command(name="eval")
