@@ -220,7 +220,10 @@ Then create:
   per-PR findings, score trend, agent metrics. Accessibility per CLAUDE.md §UX: text severity
   labels not colour-only, aria-labels, keyboard-navigable tables, 4.5:1 contrast, data-table
   fallback for every chart.
-- scripts/seed_demo.py — opens N synthetic PRs against sentinel-demo on demand.
+- scripts/seed_demo.py — opens N synthetic PRs against pr-sentinel itself on demand
+  (NOT a separate sentinel-demo repo, and NOT a composite action: the reviewer dogfoods
+  its OWN PRs via --repo ${{ github.repository }}, so demo PRs live here where the
+  analyze/publish workflows already fire).
 - docs/ARCHITECTURE.md (with the layer table and a mermaid diagram), docs/DATA.md,
   docs/RESPONSIBLE_AI.md, docs/DEMO.md
 - README.md — setup in <= 6 steps, architecture diagram, full env-var table, the rate-limit
@@ -229,7 +232,7 @@ Then create:
 Acceptance gate:
   uv run pr-sentinel eval --suite golden   # must meet EVERY threshold, exit 0
   uv run uvicorn pr_sentinel.web.app:app   # dashboard serves
-  uv run python scripts/seed_demo.py --repo <me>/sentinel-demo --count 5
+  uv run python scripts/seed_demo.py --repo <me>/pr-sentinel --count 5
   -> 5 reviewed PRs exist
 If a threshold is missed, do not lower the threshold. Improve the prompts or the grounding
 filter and re-run, and tell me what you changed and why.
