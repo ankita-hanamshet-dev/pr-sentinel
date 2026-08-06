@@ -35,7 +35,7 @@ from pr_sentinel.gh.client import GitHubClient, GitHubError
 from pr_sentinel.gh.context import PRContext, fetch_pr_context
 from pr_sentinel.gh.diff import FileDiff, added_lines, parse_diff
 from pr_sentinel.gh.history import TeamConventions
-from pr_sentinel.gh.publish import publish_report
+from pr_sentinel.gh.publish import fail_check_run, publish_report, start_check_run
 from pr_sentinel.graph.build import run_aggregate_pipeline
 from pr_sentinel.guardrails.policy import is_ignored_path
 from pr_sentinel.llm.budget import BudgetExhausted, BudgetGovernor
@@ -460,14 +460,14 @@ def refine(
 
     message = f"strategy={strategy}: nothing to refine"
     if targets:
-        settings, provider_obj, _governor, _run_id, agent_kwargs = _agent_env(provider or None)
-        triage_agent = TriageAgent(provider_obj, **agent_kwargs)  # type: ignore[arg-type]
         languages = dict(data.get("languages", {}))
         changed = dict(data.get("changed_lines_by_file", {}))
         files_summary = "\n".join(
             f"{fp.file} ({fp.language}, {changed.get(fp.file, 0)} changed lines)" for fp in targets
         )
         try:
+            settings, provider_obj, _governor, _run_id, agent_kwargs = _agent_env(provider or None)
+            triage_agent = TriageAgent(provider_obj, **agent_kwargs)  # type: ignore[arg-type]
             refined = triage_agent.plan(
                 call_budget=settings.max_llm_calls_per_run,
                 files_summary=files_summary,
@@ -610,11 +610,70 @@ def aggregate(
     typer.echo(f"wrote {out}: score {report.score:.0f}/100, {len(report.findings)} findings")
 
 
+@app.command(name="check-start")
+def check_start(
+    repo: Annotated[str, typer.Option(help="owner/name of the repository")],
+    sha: Annotated[str, typer.Option(help="head SHA to attach the check to")],
+    details_url: Annotated[str, typer.Option(help="link to the publish run")] = "",
+    out: Annotated[str, typer.Option(help="write {check_run_id} here")] = "check-meta.json",
+) -> None:
+    """Create an in-progress 'PR Sentinel' check run EARLY so the PR shows a signal.
+
+    Works on fork PRs: head_sha is reachable in the base repo via refs/pull/N/head.
+    Never fails the workflow -- if the check cannot be created, id 0 is recorded and
+    the finish step simply creates a fresh completed check instead.
+    """
+    owner, name = _split_repo(repo)
+    client = GitHubClient(_require_token())
+    audit = AuditLog(DEFAULT_AUDIT_PATH)
+    check_run_id = 0
+    try:
+        check_run_id = start_check_run(
+            client, owner, name, sha,
+            details_url=details_url or None, run_id=uuid.uuid4().hex[:12], audit=audit,
+        )
+    except GitHubError as exc:
+        typer.echo(f"could not create in-progress check (continuing): {exc}", err=True)
+    _write_json(out, {"check_run_id": check_run_id})
+    typer.echo(f"wrote {out}: check_run_id={check_run_id}")
+
+
+@app.command(name="check-fail")
+def check_fail(
+    repo: Annotated[str, typer.Option(help="owner/name of the repository")],
+    sha: Annotated[str, typer.Option(help="head SHA the check is attached to")],
+    check_run_id: Annotated[int, typer.Option(help="id from check-start")],
+    summary: Annotated[str, typer.Option(help="short failure summary")] = (
+        "The review could not be completed."
+    ),
+    details_url: Annotated[str, typer.Option(help="link to the publish run")] = "",
+) -> None:
+    """Mark the check run as failure (the silent-failure path when aggregate dies)."""
+    owner, name = _split_repo(repo)
+    if check_run_id <= 0:
+        typer.echo("no check_run_id to fail; skipping", err=True)
+        return
+    client = GitHubClient(_require_token())
+    audit = AuditLog(DEFAULT_AUDIT_PATH)
+    try:
+        fail_check_run(
+            client, owner, name, check_run_id, sha,
+            summary=summary, details_url=details_url or None,
+            run_id=uuid.uuid4().hex[:12], audit=audit,
+        )
+    except GitHubError as exc:
+        typer.echo(f"could not update check to failure: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"check {check_run_id} marked failure")
+
+
 @app.command()
 def publish(
     repo: Annotated[str, typer.Option(help="owner/name of the repository")],
     pr: Annotated[int, typer.Option(help="pull request number")],
     payload: Annotated[str, typer.Option(help="review payload to publish")] = DEFAULT_PAYLOAD_PATH,
+    check_run_id: Annotated[int, typer.Option(help="in-progress check to finish")] = 0,
+    details_url: Annotated[str, typer.Option(help="link to the publish run")] = "",
 ) -> None:
     """Post the consolidated review, summary comment, and check run to a PR."""
     owner, name = _split_repo(repo)
@@ -643,6 +702,8 @@ def publish(
             author=None,
             run_id=uuid.uuid4().hex[:12],
             audit=audit,
+            check_run_id=check_run_id or None,
+            details_url=details_url or None,
         )
     except GitHubError as exc:
         typer.echo(f"failed to publish: {exc}", err=True)

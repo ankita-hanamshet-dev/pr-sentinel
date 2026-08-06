@@ -1,8 +1,18 @@
-# PR Review Publish — the trusted half of the split pattern. Runs on workflow_run
-# (base-repo context, has secrets + write scope). Does NOT check out PR code; it
-# downloads the analyze artifact and reads pr_number from pr-meta.json — never a
-# branch name. The Actions github.token is a GitHub App token, so it can create
-# Check Runs (a personal PAT cannot).
+# PR Review Publish — the TRUSTED half. Runs on workflow_run in the base-repo context,
+# so it has the LLM secret and write scope. ALL inference lives here (fork-triggered
+# pull_request runs get no secret, so it cannot live on the analyze side).
+#
+#   start ──► agent-bug ─────────┐
+#         ├─► agent-security ─────┤
+#         ├─► agent-style ────────┤──► finalize ──► review + summary + Check Run
+#         └─► agent-improvement ──┘
+#
+# start creates an in-progress Check Run against head_sha EARLY (visible on the PR
+# before any inference; head_sha is reachable in the base repo via refs/pull/N/head,
+# incl. fork PRs), then LLM-refines only risk="unknown" files. The four agents fan out
+# (continue-on-error); finalize fans in, publishes, and COMPLETES that same check —
+# or, if aggregate produced nothing, marks it failed so the PR never shows a silent
+# no-op. Never checks out PR head code; pr_number always comes from pr-meta.json.
 name: PR Review Publish
 
 on:
@@ -13,20 +23,32 @@ on:
 permissions:
   contents: read
 
+# Keyed on the source fork + branch (NOT the PR number, which is absent for forks):
+# a force-push re-triggers analyze -> a new publish run that cancels this stale one.
 concurrency:
-  group: sentinel-publish-${{ github.event.workflow_run.id }}
+  group: >-
+    sentinel-publish-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  PR_SENTINEL_LLM_PROVIDER: ${{ vars.PR_SENTINEL_LLM_PROVIDER || 'anthropic' }}
+  PR_SENTINEL_MODEL: ${{ vars.PR_SENTINEL_MODEL || 'claude-sonnet-5' }}
+  PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
+  PR_SENTINEL_TRIAGE_STRATEGY: ${{ vars.PR_SENTINEL_TRIAGE_STRATEGY || 'hybrid' }}
+  PUBLISH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
 jobs:
-  publish:
+  start:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
       checks: write
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
+    outputs:
+      pr: ${{ steps.meta.outputs.pr }}
+      head_sha: ${{ steps.meta.outputs.head_sha }}
+      check_run_id: ${{ steps.check.outputs.check_run_id }}
     steps:
       - name: Checkout tool code (default branch, NOT the PR head)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,21 +57,138 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: "3.11"
-      - name: Download the analyze artifact from the triggering run
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sentinel/cache.sqlite
+          key: sentinel-cache-${{ runner.os }}-${{ hashFiles('prompts/**') }}
+      - name: Download the analyze artifact (context.json + pr-meta.json)
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: review-payload
+          name: sentinel-context
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
       - run: uv sync --frozen
-      - name: Read pr_number from pr-meta.json (never trust a branch name)
+      - name: Read pr_number + head_sha from pr-meta.json (never trust a branch name)
         id: meta
         run: |
-          pr="$(uv run python -c "import json;print(json.load(open('pr-meta.json'))['pr_number'])")"
-          echo "pr=$pr" >> "$GITHUB_OUTPUT"
-      - name: Publish the consolidated review
+          uv run python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          m = json.load(open("pr-meta.json"))
+          print(f"pr={m['pr_number']}")
+          print(f"head_sha={m['head_sha']}")
+          PY
+      - name: Create the in-progress Check Run EARLY (visible on the PR at once)
+        id: check
+        run: |
+          uv run pr-sentinel check-start \
+            --repo "${{ github.repository }}" \
+            --sha "${{ steps.meta.outputs.head_sha }}" \
+            --details-url "${PUBLISH_RUN_URL}" \
+            --out check-meta.json
+          cid="$(uv run python -c "import json;print(json.load(open('check-meta.json'))['check_run_id'])")"
+          echo "check_run_id=$cid" >> "$GITHUB_OUTPUT"
+      - name: Refine triage — LLM re-triages ONLY risk="unknown" files (hybrid)
+        continue-on-error: true # never orphan the in-progress check; heuristic plan stands
+        run: uv run pr-sentinel refine --context context.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sentinel-context-refined
+          path: |
+            context.json
+            pr-meta.json
+          retention-days: 14
+          if-no-files-found: error
+
+  agents:
+    name: agent-${{ matrix.role }}
+    needs: [start]
+    continue-on-error: true # one crashing specialist cannot sink the run
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [bug, security, style, improvement]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sentinel/cache.sqlite
+          key: sentinel-cache-${{ runner.os }}-${{ hashFiles('prompts/**') }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sentinel-context-refined
+      - run: uv sync --frozen
+      - name: Run the ${{ matrix.role }} specialist -> agent-${{ matrix.role }}.json
+        run: |
+          uv run pr-sentinel agent \
+            --role "${{ matrix.role }}" \
+            --context context.json \
+            --out "agent-${{ matrix.role }}.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: sentinel-agent-${{ matrix.role }}
+          path: agent-${{ matrix.role }}.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  finalize:
+    needs: [start, agents]
+    if: ${{ always() && needs.start.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - name: Download the refined context
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sentinel-context-refined
+      - name: Download all agent-result artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sentinel-agent-*
+          merge-multiple: true
+      - run: uv sync --frozen
+      - name: Fan in -> review-payload.json (+ pr-meta.json)
+        continue-on-error: true # a crash here must still leave a visible failed check
+        run: |
+          uv run pr-sentinel aggregate \
+            --context context.json \
+            --agent agent-bug.json \
+            --agent agent-security.json \
+            --agent agent-style.json \
+            --agent agent-improvement.json \
+            --out review-payload.json
+      - name: Publish the review + complete the Check Run
+        if: ${{ hashFiles('review-payload.json') != '' }}
         run: |
           uv run pr-sentinel publish \
             --repo "${{ github.repository }}" \
-            --pr "${{ steps.meta.outputs.pr }}" \
-            --payload review-payload.json
+            --pr "${{ needs.start.outputs.pr }}" \
+            --payload review-payload.json \
+            --check-run-id "${{ needs.start.outputs.check_run_id }}" \
+            --details-url "${PUBLISH_RUN_URL}"
+      - name: Silent-failure path — mark the Check Run failed if no payload
+        if: ${{ hashFiles('review-payload.json') == '' }}
+        run: |
+          uv run pr-sentinel check-fail \
+            --repo "${{ github.repository }}" \
+            --sha "${{ needs.start.outputs.head_sha }}" \
+            --check-run-id "${{ needs.start.outputs.check_run_id }}" \
+            --details-url "${PUBLISH_RUN_URL}" \
+            --summary "The review could not be completed (aggregate produced no payload)."

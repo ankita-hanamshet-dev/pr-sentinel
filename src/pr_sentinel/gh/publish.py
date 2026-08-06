@@ -225,6 +225,88 @@ def upsert_summary(
     return action
 
 
+def _link_line(details_url: str | None) -> str:
+    return f"\n\n[View the full review run]({details_url})" if details_url else ""
+
+
+def start_check_run(
+    client: GitHubClient,
+    owner: str,
+    repo: str,
+    head_sha: str,
+    *,
+    details_url: str | None = None,
+    run_id: str,
+    audit: AuditLog,
+) -> int:
+    """POST an in-progress Check Run against head_sha so the PR shows a pending
+    'PR Sentinel' check immediately; returns its id for later completion.
+
+    Created early on the publish side (against workflow_run.head_sha, reachable in
+    the base repo via refs/pull/N/head even for fork PRs) so the PR page shows a
+    signal before any inference runs.
+    """
+    payload: dict[str, object] = {
+        "name": CHECK_RUN_NAME,
+        "head_sha": head_sha,
+        "status": "in_progress",
+        "output": {
+            "title": "PR Sentinel: analyzing",
+            "summary": f"Review in progress.{_link_line(details_url)}",
+        },
+    }
+    if details_url:
+        payload["details_url"] = details_url
+    response = client.post(f"/repos/{owner}/{repo}/check-runs", payload)
+    body = response.json_body
+    check_run_id = int(body["id"]) if isinstance(body, dict) and "id" in body else 0
+    audit.record(
+        run_id=run_id,
+        actor="pr-sentinel",
+        action="start_check_run",
+        target=f"{owner}/{repo}@{head_sha}",
+        decision="in_progress",
+        reason="early in-progress check run",
+    )
+    return check_run_id
+
+
+def fail_check_run(
+    client: GitHubClient,
+    owner: str,
+    repo: str,
+    check_run_id: int,
+    head_sha: str,
+    *,
+    summary: str = "The review could not be completed.",
+    details_url: str | None = None,
+    run_id: str,
+    audit: AuditLog,
+) -> None:
+    """PATCH the in-progress check to a visible failure (the silent-failure path)."""
+    payload: dict[str, object] = {
+        "name": CHECK_RUN_NAME,
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "failure",
+        "output": {
+            "title": "PR Sentinel: review could not be completed",
+            "summary": f"{summary}{_link_line(details_url)}",
+        },
+    }
+    if details_url:
+        payload["details_url"] = details_url
+    client.patch(f"/repos/{owner}/{repo}/check-runs/{check_run_id}", payload)
+    audit.record(
+        run_id=run_id,
+        actor="pr-sentinel",
+        action="fail_check_run",
+        target=f"{owner}/{repo}@{head_sha}",
+        decision="failure",
+        reason="review could not be completed",
+    )
+
+
 def create_check_run(
     client: GitHubClient,
     owner: str,
@@ -233,24 +315,35 @@ def create_check_run(
     *,
     run_id: str,
     audit: AuditLog,
+    check_run_id: int | None = None,
+    details_url: str | None = None,
 ) -> str:
-    """POST an advisory Check Run. failure only on a critical finding."""
+    """Finish the Check Run: update the early in-progress one if given its id, else
+    POST a fresh completed one. failure only on a critical finding."""
     conclusion = check_run_conclusion(report)
+    summary = (
+        f"Score {report.score:.0f}/100, {len(report.findings)} finding(s)."
+        f"{_link_line(details_url)}"
+    )
     payload: dict[str, object] = {
         "name": CHECK_RUN_NAME,
         "head_sha": report.head_sha,
         "status": "completed",
         "conclusion": conclusion,
-        "output": {
-            "title": f"PR Sentinel: {conclusion}",
-            "summary": f"Score {report.score:.0f}/100, {len(report.findings)} finding(s).",
-        },
+        "output": {"title": f"PR Sentinel: {conclusion}", "summary": summary},
     }
-    client.post(f"/repos/{owner}/{repo}/check-runs", payload)
+    if details_url:
+        payload["details_url"] = details_url
+    if check_run_id is not None:
+        client.patch(f"/repos/{owner}/{repo}/check-runs/{check_run_id}", payload)
+        action = "update_check_run"
+    else:
+        client.post(f"/repos/{owner}/{repo}/check-runs", payload)
+        action = "create_check_run"
     audit.record(
         run_id=run_id,
         actor="pr-sentinel",
-        action="create_check_run",
+        action=action,
         target=f"{owner}/{repo}@{report.head_sha}",
         decision=conclusion,
         reason=f"advisory check run ({conclusion})",
@@ -269,17 +362,28 @@ def publish_report(
     author: str | None = None,
     run_id: str,
     audit: AuditLog,
+    check_run_id: int | None = None,
+    details_url: str | None = None,
 ) -> PublishResult:
-    """Post the review, upsert the sticky summary, and create the Check Run."""
+    """Post the review, upsert the sticky summary, and finish the Check Run.
+
+    If check_run_id is given, the early in-progress check from start_check_run is
+    completed in place instead of a new one being created.
+    """
     posted, suppressed = post_review(
         client, owner, repo, number, report,
         max_comments=max_comments, author=author, run_id=run_id, audit=audit,
     )
+    summary_text = summary_body(report, suppressed=suppressed)
+    if details_url:
+        summary_text += f"\n\n<sub>[Full review run]({details_url})</sub>"
     action = upsert_summary(
-        client, owner, repo, number,
-        summary_body(report, suppressed=suppressed), run_id=run_id, audit=audit,
+        client, owner, repo, number, summary_text, run_id=run_id, audit=audit,
     )
-    conclusion = create_check_run(client, owner, repo, report, run_id=run_id, audit=audit)
+    conclusion = create_check_run(
+        client, owner, repo, report,
+        run_id=run_id, audit=audit, check_run_id=check_run_id, details_url=details_url,
+    )
     return PublishResult(
         comments_posted=posted,
         comments_suppressed=suppressed,

@@ -14,9 +14,11 @@ from pr_sentinel.gh.publish import (
     build_review_comments,
     check_run_conclusion,
     comment_body,
+    fail_check_run,
     post_review,
     publish_report,
     rule_link,
+    start_check_run,
     summary_body,
     upsert_summary,
 )
@@ -160,6 +162,64 @@ def test_publish_report_posts_one_review_and_audits(
     actions = [json.loads(line)["action"] for line in audit_path.read_text().splitlines()]
     assert "post_review_comment" in actions
     assert "create_check_run" in actions
+
+
+def test_start_check_run_creates_in_progress_and_returns_id(
+    httpx_mock: HTTPXMock, tmp_path: Path
+) -> None:
+    httpx_mock.add_response(method="POST", url=f"{BASE}/repos/o/r/check-runs", json={"id": 42})
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    cid = start_check_run(
+        _client(), "o", "r", "deadbeef",
+        details_url="https://runs/9", run_id="run", audit=audit,
+    )
+    assert cid == 42
+    req = httpx_mock.get_requests()[0]
+    body = json.loads(req.content)
+    assert body["status"] == "in_progress"
+    assert body["head_sha"] == "deadbeef"
+    assert body["details_url"] == "https://runs/9"
+
+
+def test_publish_updates_early_check_run_in_place(
+    httpx_mock: HTTPXMock, tmp_path: Path
+) -> None:
+    httpx_mock.add_response(
+        method="POST", url=f"{BASE}/repos/o/r/pulls/7/reviews", json={"id": 5}
+    )
+    httpx_mock.add_response(method="GET", url=COMMENTS_URL, json=[])
+    httpx_mock.add_response(
+        method="POST", url=f"{BASE}/repos/o/r/issues/7/comments", json={"id": 6}
+    )
+    # PATCH the existing check run (id 42), never POST a new one.
+    httpx_mock.add_response(method="PATCH", url=f"{BASE}/repos/o/r/check-runs/42", json={"id": 42})
+    audit_path = tmp_path / "audit.jsonl"
+
+    publish_report(
+        _client(), "o", "r", 7, _report([_finding()]),
+        max_comments=25, author="octocat", run_id="run", audit=AuditLog(audit_path),
+        check_run_id=42, details_url="https://runs/9",
+    )
+    methods = {(r.method, r.url.path) for r in httpx_mock.get_requests()}
+    assert ("PATCH", "/repos/o/r/check-runs/42") in methods
+    assert not any(m == "POST" and p == "/repos/o/r/check-runs" for m, p in methods)
+    actions = [json.loads(line)["action"] for line in audit_path.read_text().splitlines()]
+    assert "update_check_run" in actions
+
+
+def test_fail_check_run_marks_failure(httpx_mock: HTTPXMock, tmp_path: Path) -> None:
+    httpx_mock.add_response(method="PATCH", url=f"{BASE}/repos/o/r/check-runs/42", json={"id": 42})
+    audit_path = tmp_path / "audit.jsonl"
+    fail_check_run(
+        _client(), "o", "r", 42, "deadbeef",
+        summary="The review could not be completed.", details_url="https://runs/9",
+        run_id="run", audit=AuditLog(audit_path),
+    )
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    assert body["status"] == "completed"
+    assert body["conclusion"] == "failure"
+    actions = [json.loads(line)["action"] for line in audit_path.read_text().splitlines()]
+    assert "fail_check_run" in actions
 
 
 def test_rule_link_variants() -> None:
