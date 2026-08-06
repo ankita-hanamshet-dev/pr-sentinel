@@ -30,6 +30,7 @@ from pr_sentinel.core.scoring import (
     partition_by_confidence,
     pr_score,
 )
+from pr_sentinel.core.triage import TriageInput, heuristic_triage
 from pr_sentinel.gh.client import GitHubClient, GitHubError
 from pr_sentinel.gh.context import PRContext, fetch_pr_context
 from pr_sentinel.gh.diff import FileDiff, added_lines, parse_diff
@@ -316,6 +317,68 @@ def _run_one_agent(
 
 
 @app.command()
+def extract(
+    repo: Annotated[str, typer.Option(help="owner/name of the repository")],
+    pr: Annotated[int, typer.Option(help="pull request number")],
+    out: Annotated[str, typer.Option(help="context artifact output path")] = DEFAULT_CONTEXT_PATH,
+) -> None:
+    """Analyze-side step: fetch the PR, parse the diff, run HEURISTIC triage.
+
+    No model call and no LLM secret -- safe on fork-triggered runs. Files the
+    heuristic cannot classify get risk="unknown" for the publish side to escalate.
+    """
+    owner, name = _split_repo(repo)
+    client = GitHubClient(_require_token())
+    try:
+        ctx = fetch_pr_context(client, owner, name, pr)
+    except GitHubError as exc:
+        typer.echo(f"failed to fetch PR: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    settings = get_settings()
+    hunks_by_file = ctx.hunks_by_file()
+    all_hunks = [hunk for hunks in hunks_by_file.values() for hunk in hunks]
+    changed = ctx.changed_lines_by_file()
+    total_diff_lines = sum(len(hunk.lines) for hunk in all_hunks)
+    inputs = [
+        TriageInput(
+            file=path,
+            language=ctx.languages.get(path, "unknown"),
+            changed_lines=changed.get(path, 0),
+        )
+        for path in hunks_by_file
+    ]
+    plan = heuristic_triage(
+        inputs,
+        call_budget=settings.max_llm_calls_per_run,
+        max_diff_lines=settings.max_diff_lines,
+        total_diff_lines=total_diff_lines,
+    )
+
+    _write_json(
+        out,
+        {
+            "pr_number": ctx.number,
+            "head_sha": ctx.head_sha,
+            "model": settings.model,
+            "diff_text": ctx.diff_text,
+            "hunks": [hunk.model_dump(mode="json") for hunk in all_hunks],
+            "changed_lines_by_file": changed,
+            "languages": ctx.languages,
+            "triage": [fp.model_dump(mode="json") for fp in plan.files],
+            "prompt_versions": {"triage": "heuristic"},
+            "max_diff_lines": settings.max_diff_lines,
+            "diff_lines": total_diff_lines,
+            "confidence_floor": settings.confidence_floor,
+        },
+    )
+    unknown = sum(1 for fp in plan.files if fp.risk == "unknown")
+    typer.echo(
+        f"wrote {out}: {len(plan.files)} files triaged ({unknown} unknown), {len(all_hunks)} hunks"
+    )
+
+
+@app.command()
 def triage(
     repo: Annotated[str, typer.Option(help="owner/name of the repository")],
     pr: Annotated[int, typer.Option(help="pull request number")],
@@ -366,6 +429,63 @@ def triage(
         },
     )
     typer.echo(f"wrote {out}: {len(plan.files)} files triaged, {len(all_hunks)} hunks")
+
+
+@app.command()
+def refine(
+    context: Annotated[
+        str, typer.Option(help="heuristic context artifact from extract")
+    ] = DEFAULT_CONTEXT_PATH,
+    provider: Annotated[str, typer.Option(help="LLM provider override")] = "",
+    out: Annotated[str, typer.Option(help="output path (default: overwrite context)")] = "",
+) -> None:
+    """Publish-side triage: apply PR_SENTINEL_TRIAGE_STRATEGY to the heuristic plan.
+
+    hybrid (default) runs the LLM triage agent ONLY on risk="unknown" files; llm
+    re-triages every file; heuristic is a no-op. The TriagePlan schema is identical
+    either way. On refinement failure the heuristic plan is kept (unknown files keep
+    their conservative agent set), so this step never blocks the review.
+    """
+    out_path = out or context
+    data = json.loads(Path(context).read_text(encoding="utf-8"))
+    plan_files = [TriageFilePlan.model_validate(fp) for fp in data["triage"]]
+
+    strategy = get_settings().triage_strategy
+    if strategy == "heuristic":
+        targets: list[TriageFilePlan] = []
+    elif strategy == "llm":
+        targets = list(plan_files)
+    else:  # hybrid
+        targets = [fp for fp in plan_files if fp.risk == "unknown"]
+
+    message = f"strategy={strategy}: nothing to refine"
+    if targets:
+        settings, provider_obj, _governor, _run_id, agent_kwargs = _agent_env(provider or None)
+        triage_agent = TriageAgent(provider_obj, **agent_kwargs)  # type: ignore[arg-type]
+        languages = dict(data.get("languages", {}))
+        changed = dict(data.get("changed_lines_by_file", {}))
+        files_summary = "\n".join(
+            f"{fp.file} ({fp.language}, {changed.get(fp.file, 0)} changed lines)" for fp in targets
+        )
+        try:
+            refined = triage_agent.plan(
+                call_budget=settings.max_llm_calls_per_run,
+                files_summary=files_summary,
+                pr_metadata="(re-triage of files the heuristic could not classify)",
+                ci_results="(none provided)",
+                file_paths=[fp.file for fp in targets],
+                languages=languages,
+            )
+            refined_by_file = {fp.file: fp for fp in refined.files}
+            plan_files = [refined_by_file.get(fp.file, fp) for fp in plan_files]
+            data.setdefault("prompt_versions", {})["triage"] = triage_agent.prompt_version
+            message = f"refined {len(targets)} files via LLM triage ({strategy})"
+        except LLMError as exc:
+            message = f"triage refinement failed ({exc}); kept heuristic plan"
+
+    data["triage"] = [fp.model_dump(mode="json") for fp in plan_files]
+    _write_json(out_path, data)
+    typer.echo(f"wrote {out_path}: {message}")
 
 
 @app.command()
