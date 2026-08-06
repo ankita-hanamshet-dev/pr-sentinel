@@ -32,7 +32,6 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       PR_SENTINEL_LLM_PROVIDER: ${{ vars.PR_SENTINEL_LLM_PROVIDER || 'anthropic' }}
       PR_SENTINEL_MODEL: ${{ vars.PR_SENTINEL_MODEL || 'claude-sonnet-5' }}
-      PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
     steps:
       - name: Checkout tool code (default branch)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,6 +47,8 @@ jobs:
           key: sentinel-cache-${{ runner.os }}-${{ hashFiles('prompts/**') }}
       - run: uv sync --frozen
       - name: Re-run review (analyze + publish) for this PR
+        env:
+          PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
         run: |
           uv run pr-sentinel analyze \
             --repo "${{ github.repository }}" \

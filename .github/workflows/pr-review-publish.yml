@@ -30,11 +30,13 @@ concurrency:
     sentinel-publish-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
+# The model key is NOT here: it is injected only on the three steps that make the
+# model HTTP call (refine, agent, aggregate), never job- or workflow-wide, so the
+# GitHub-only steps (check-start/check-fail/publish, uploads, checkouts) never see it.
 env:
   GITHUB_TOKEN: ${{ github.token }}
   PR_SENTINEL_LLM_PROVIDER: ${{ vars.PR_SENTINEL_LLM_PROVIDER || 'anthropic' }}
   PR_SENTINEL_MODEL: ${{ vars.PR_SENTINEL_MODEL || 'claude-sonnet-5' }}
-  PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
   PR_SENTINEL_TRIAGE_STRATEGY: ${{ vars.PR_SENTINEL_TRIAGE_STRATEGY || 'hybrid' }}
   PUBLISH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
@@ -89,6 +91,8 @@ jobs:
           echo "check_run_id=$cid" >> "$GITHUB_OUTPUT"
       - name: Refine triage — LLM re-triages ONLY risk="unknown" files (hybrid)
         continue-on-error: true # never orphan the in-progress check; heuristic plan stands
+        env:
+          PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
         run: uv run pr-sentinel refine --context context.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -126,6 +130,8 @@ jobs:
           name: sentinel-context-refined
       - run: uv sync --frozen
       - name: Run the ${{ matrix.role }} specialist -> agent-${{ matrix.role }}.json
+        env:
+          PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
         run: |
           uv run pr-sentinel agent \
             --role "${{ matrix.role }}" \
@@ -166,6 +172,8 @@ jobs:
       - run: uv sync --frozen
       - name: Fan in -> review-payload.json (+ pr-meta.json)
         continue-on-error: true # a crash here must still leave a visible failed check
+        env:
+          PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }} # critic call
         run: |
           uv run pr-sentinel aggregate \
             --context context.json \
