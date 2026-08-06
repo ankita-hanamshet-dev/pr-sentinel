@@ -1,0 +1,54 @@
+# Agent Command — slash commands on PRs. The authorization gate is the job `if:`
+# and runs FIRST: a comment from a non-collaborator (or a non-/sentinel comment, or
+# a comment on a plain issue) matches nothing, so the job is skipped silently
+# (exit 0, no output). issue_comment always runs in the base-repo context, so it
+# has secrets + write scope even for fork PRs — the safe way to review a fork.
+name: Agent Command
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sentinel-command-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    # AUTHORIZATION GATE FIRST: PR comment + collaborator+ + exact command.
+    if: >-
+      github.event.issue.pull_request &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      startsWith(github.event.comment.body, '/sentinel review')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      PR_SENTINEL_LLM_PROVIDER: ${{ vars.PR_SENTINEL_LLM_PROVIDER || 'anthropic' }}
+      PR_SENTINEL_MODEL: ${{ vars.PR_SENTINEL_MODEL || 'claude-sonnet-5' }}
+      PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
+    steps:
+      - name: Checkout tool code (default branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - name: Restore LLM response cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sentinel/cache.sqlite
+          key: sentinel-cache-${{ runner.os }}-${{ hashFiles('prompts/**') }}
+      - run: uv sync --frozen
+      - name: Re-run review (analyze + publish) for this PR
+        run: |
+          uv run pr-sentinel analyze \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.issue.number }}"

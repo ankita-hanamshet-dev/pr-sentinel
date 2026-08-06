@@ -1,0 +1,83 @@
+# PR Review Analyze — the untrusted-safe half of the split analyse/publish pattern.
+# NO write permissions. Never checks out PR head code (checks out the trusted BASE
+# ref to run the tool; the PR diff is read via the API as untrusted DATA).
+#
+# DEVIATIONS from CLAUDE.md §Workflows, called out honestly:
+#  - Single `analyze` job, not four parallel agent jobs. The CLI is a single-process
+#    pipeline (triage + 4 specialists + aggregate in one run); a true 4-Actions-job
+#    fan-out needs per-agent CLI entrypoints + per-agent artifacts that Phase 5/6 did
+#    not build. The 4-way parallelism currently lives inside the `analyze` process.
+#  - Provider is Anthropic (secret key), not the retired GitHub Models. The LLM key is
+#    injected below; GitHub WITHHOLDS secrets from fork-triggered pull_request runs, so
+#    this stays fork-safe — on a fork PR the key is empty and inference degrades.
+name: PR Review Analyze
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# No write scope anywhere in this workflow.
+permissions:
+  contents: read
+
+concurrency:
+  group: sentinel-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # read-only PR access
+      PR_SENTINEL_LLM_PROVIDER: ${{ vars.PR_SENTINEL_LLM_PROVIDER || 'anthropic' }}
+      PR_SENTINEL_MODEL: ${{ vars.PR_SENTINEL_MODEL || 'claude-sonnet-5' }}
+      # Empty on fork PRs (GitHub withholds secrets) -> graceful degradation.
+      PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
+    steps:
+      - name: Checkout BASE ref (trusted tool code, NEVER the PR head)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - name: Restore LLM response cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sentinel/cache.sqlite
+          key: sentinel-cache-${{ runner.os }}-${{ hashFiles('prompts/**') }}
+      - run: uv sync --frozen
+      - name: Analyze the PR (writes review-payload.json + pr-meta.json; never posts)
+        run: |
+          uv run pr-sentinel analyze \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --dry-run
+      - name: Step summary
+        if: always()
+        run: |
+          {
+            echo "## PR Sentinel — analyze"
+            if [ -f review-payload.json ]; then
+              uv run python - <<'PY'
+          import json
+          r = json.load(open("review-payload.json"))
+          print(f"score **{r['score']:.0f}/100**, {len(r['findings'])} findings, "
+                f"needs_human_review={r['needs_human_review']}")
+          PY
+            else
+              echo "no payload produced (inference unavailable — e.g. fork PR without secret)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload review payload for the publish workflow
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: review-payload
+          path: |
+            review-payload.json
+            pr-meta.json
+          retention-days: 14
+          if-no-files-found: error

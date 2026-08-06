@@ -1,0 +1,55 @@
+# PR Review Publish — the trusted half of the split pattern. Runs on workflow_run
+# (base-repo context, has secrets + write scope). Does NOT check out PR code; it
+# downloads the analyze artifact and reads pr_number from pr-meta.json — never a
+# branch name. The Actions github.token is a GitHub App token, so it can create
+# Check Runs (a personal PAT cannot).
+name: PR Review Publish
+
+on:
+  workflow_run:
+    workflows: ["PR Review Analyze"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sentinel-publish-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout tool code (default branch, NOT the PR head)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - name: Download the analyze artifact from the triggering run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: review-payload
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - run: uv sync --frozen
+      - name: Read pr_number from pr-meta.json (never trust a branch name)
+        id: meta
+        run: |
+          pr="$(uv run python -c "import json;print(json.load(open('pr-meta.json'))['pr_number'])")"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+      - name: Publish the consolidated review
+        run: |
+          uv run pr-sentinel publish \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.meta.outputs.pr }}" \
+            --payload review-payload.json

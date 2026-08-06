@@ -1,0 +1,42 @@
+# Security Validation — deterministic scanners (bandit + pip-audit), sequenced
+# AFTER CI Validation via workflow_run. The aggregator can cross-reference these
+# with the probabilistic security agent (corroboration boost).
+name: Security Validation
+
+on:
+  workflow_run:
+    workflows: ["CI Validation"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    # Only run once CI Validation actually succeeded.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      # Scanners run to completion and report; findings do not fail this job (the
+      # aggregator decides). NOTE: emitted as JSON, not SARIF — pip-audit has no
+      # native SARIF writer; JSON carries the same findings for cross-referencing.
+      - name: bandit (static security scan)
+        run: uvx bandit -r src -f json -o bandit.json || true
+      - name: pip-audit (dependency CVE scan)
+        run: uvx pip-audit -f json -o pip-audit.json || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-scan
+          path: |
+            bandit.json
+            pip-audit.json
+          retention-days: 14
+          if-no-files-found: warn

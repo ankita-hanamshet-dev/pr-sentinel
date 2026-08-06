@@ -1,0 +1,97 @@
+# CI Validation — lint, types, tests (+ the Phase 2 diff-parser oracle), build.
+# Every action is pinned to a full commit SHA; every job declares permissions.
+name: CI Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Never rely on defaults.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+
+  types:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - run: uv sync --frozen
+      - run: uv run mypy src
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PR_SENTINEL_LLM_PROVIDER: replay # zero LLM calls in CI
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - run: uv sync --frozen
+      - name: Unit tests (replay provider, deterministic)
+        run: uv run pytest -q
+      - name: Diff-parser oracle (git-apply ground truth, fails CI on any drift)
+        run: uv run python scripts/verify_phase2.py
+
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - run: uv build
+
+  results:
+    # Consumed by the review agents ("your change to X broke test Y").
+    needs: [lint, types, test, build]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Write ci-results.json (job statuses)
+        run: |
+          cat > ci-results.json <<EOF
+          {
+            "commit": "${{ github.sha }}",
+            "jobs": {
+              "lint": "${{ needs.lint.result }}",
+              "types": "${{ needs.types.result }}",
+              "test": "${{ needs.test.result }}",
+              "build": "${{ needs.build.result }}"
+            }
+          }
+          EOF
+          cat ci-results.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-results
+          path: ci-results.json
+          retention-days: 14
