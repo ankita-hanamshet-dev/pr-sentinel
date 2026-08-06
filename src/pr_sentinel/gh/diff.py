@@ -97,6 +97,11 @@ def parse_diff(text: str) -> list[FileDiff]:
     current: FileDiff | None = None
     hunk: Hunk | None = None
     cr_flags: dict[int, list[bool]] = {}
+    # Per-hunk [new_consumed, old_consumed], so an empty body line can be recognised
+    # as a blank CONTEXT line (git apply's behaviour) only while the hunk still
+    # expects lines -- and ignored once the hunk is full (e.g. a trailing "" from the
+    # final newline split).
+    fill: dict[int, list[int]] = {}
 
     for physical in text.split("\n"):  # split on LF; strip \r ourselves
         had_cr = physical.endswith("\r")
@@ -157,10 +162,25 @@ def parse_diff(text: str) -> list[FileDiff]:
                 )
                 current.hunks.append(hunk)
                 cr_flags[id(hunk)] = []
-            elif hunk is not None and not raw.startswith("\\") and raw[:1] in (" ", "+", "-"):
+                fill[id(hunk)] = [0, 0]
+            elif hunk is not None and not raw.startswith("\\"):
                 # A "\ No newline at end of file" marker is metadata, not content.
-                hunk.lines.append(raw)
-                cr_flags[id(hunk)].append(had_cr)
+                tag = raw[:1]
+                new_c, old_c = fill[id(hunk)]
+                if tag == "" and (new_c < hunk.new_len or old_c < hunk.old_len):
+                    # A blank context line emitted without its leading space; git apply
+                    # treats a bare empty line in the hunk body as context. Normalise to
+                    # a space so post-image numbering stays correct.
+                    hunk.lines.append(" ")
+                    cr_flags[id(hunk)].append(had_cr)
+                    fill[id(hunk)] = [new_c + 1, old_c + 1]
+                elif tag in (" ", "+", "-"):
+                    hunk.lines.append(raw)
+                    cr_flags[id(hunk)].append(had_cr)
+                    fill[id(hunk)] = [
+                        new_c + (tag != "-"),
+                        old_c + (tag != "+"),
+                    ]
 
     for file in files:
         for hunk in file.hunks:

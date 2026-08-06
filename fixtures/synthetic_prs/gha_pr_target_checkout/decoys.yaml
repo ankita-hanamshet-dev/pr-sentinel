@@ -1,0 +1,14 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: automation/labeler.yml
+    line_start: 13
+    line_end: 13
+    pattern: '      - uses: actions/checkout@v4'
+    why_not_a_finding: >
+      This pre-existing checkout has no with.ref, so it checks out the base
+      repository's own commit -- trusted code that already lives in the repo, not
+      the fork's PR head. Under pull_request_target that is the safe default. It
+      is textually identical to the checkout on line 16, so a reviewer must
+      distinguish by the presence of the ref: input rather than flagging every
+      actions/checkout step in a pull_request_target workflow.

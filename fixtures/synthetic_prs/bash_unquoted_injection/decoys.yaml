@@ -1,0 +1,24 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: scripts/deploy.sh
+    line_start: 14
+    line_end: 14
+    pattern: 'rm -rf "$build_dir/cache"'
+    why_not_a_finding: >
+      safe_cleanup() runs the same "rm -rf" verb but the variable expansion is
+      correctly double-quoted, so $build_dir is passed as a single argument with
+      no word-splitting or globbing regardless of its contents. This is the
+      correct way to write the operation and must not be flagged. A naive
+      reviewer grepping for "rm -rf $" would wrongly flag every rm in the file;
+      a real review must distinguish the quoted usage here from the unquoted one
+      above it.
+  - file: scripts/deploy.sh
+    line_start: 18
+    line_end: 18
+    pattern: 'rsync -a ./dist/ "$target/"'
+    why_not_a_finding: >
+      This rsync uses $target inside double quotes, so the value is passed as a
+      single argument and cannot word-split or inject additional arguments.
+      Unchanged, pre-existing context line included only to show the hunk
+      surroundings -- there is no injection here.

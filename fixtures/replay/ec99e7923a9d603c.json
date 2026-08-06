@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"scripts/deploy.sh\", \"line_start\": 9, \"line_end\": 9, \"severity\": \"high\", \"confidence\": 0.9, \"rule_id\": \"CWE-78\", \"title\": \"cleanup() runs \\\"rm -rf $target/tmp\\\" with $target left unquoted\", \"fact\": \"cleanup() runs \\\"rm -rf $target/tmp\\\" with $target left unquoted. Because the expansion is unquoted the shell applies word-splitting and pathname globbing to its value, so a target such as \\\"/ x\\\" or one containing whitespace and metacharacters expands into multiple rm arguments (for example \\\"rm -rf / x/tmp\\\"), letting an attacker who controls the first positional argument delete unintended paths or inject extra targets into the destructive command. The value must be double-quoted: rm -rf \\\"$target/tmp\\\".\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"  rm -rf $target/tmp\", \"suggested_patch\": null, \"references\": []}]}",
+  "tokens_in": 606,
+  "tokens_out": 244,
+  "model": "claude-sonnet-5"
+}

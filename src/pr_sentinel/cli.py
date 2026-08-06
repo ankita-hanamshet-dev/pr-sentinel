@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -831,7 +832,11 @@ def _collect_findings(
 
 
 def _run_local_review(
-    fixture_path: Path, provider_name: str
+    fixture_path: Path,
+    provider_name: str,
+    *,
+    provider_obj: object | None = None,
+    use_cache: bool = True,
 ) -> tuple[ReviewReport, str | None, list[GroundingRejection], list[Finding], list[Finding]]:
     """Linear (non-LangGraph) pipeline: triage -> chunk -> specialists -> dedup ->
     ground -> critic -> score. Phase 6 re-homes this orchestration into
@@ -852,9 +857,13 @@ def _run_local_review(
     changed_file_paths = frozenset(file_paths)
 
     settings = get_settings().model_copy(update={"llm_provider": provider_name})
-    provider = get_provider(settings)
+    provider = provider_obj if provider_obj is not None else get_provider(settings)
     governor = BudgetGovernor(settings)
-    cache = LLMCache(path=Path(".sentinel/cache.sqlite"), ttl_days=settings.cache_ttl_days)
+    cache = (
+        LLMCache(path=Path(".sentinel/cache.sqlite"), ttl_days=settings.cache_ttl_days)
+        if use_cache
+        else None
+    )
     AuditLog(DEFAULT_AUDIT_PATH)  # ensures .sentinel/ exists; wired into agents in Phase 6/7
     run_id = uuid.uuid4().hex[:12]
     agent_kwargs: dict[str, object] = {
@@ -916,6 +925,7 @@ def _run_local_review(
     _confident, low_confidence = partition_by_confidence(final_findings, settings.confidence_floor)
     inline_findings, nit_overflow = apply_nit_cap(_confident)
 
+    snap = governor.snapshot()
     report = ReviewReport(
         pr_number=0,
         head_sha="local",
@@ -924,11 +934,14 @@ def _run_local_review(
         score=score,
         per_file_scores=per_file_scores,
         agent_errors=agent_errors,
-        budget_used=governor.snapshot()["calls_used"],
+        budget_used=snap["calls_used"],
         grounding_rejects=len(rejects),
         needs_human_review=escalate,
         prompt_versions=prompt_versions,
         duration_ms=int((time.perf_counter() - start) * 1000),
+        cost_usd=round(governor.cost_used, 6),
+        cache_hits=snap["cache_hits"],
+        cache_writes=snap["cache_writes"],
     )
     return report, escalate_reason, rejects, low_confidence, nit_overflow
 
@@ -1055,10 +1068,49 @@ def smoke(
 
 @app.command(name="eval")
 def eval_(
-    suite: Annotated[str, typer.Option(help="eval suite name")] = "golden",
+    suite: Annotated[str, typer.Option(help="eval suite name or path")] = "golden",
+    record: Annotated[
+        bool, typer.Option("--record", help="run LIVE and save responses into fixtures/replay/")
+    ] = False,
 ) -> None:
-    """Replay an eval suite and check metrics against the CLAUDE.md thresholds."""
-    _pending("eval", "Phase 8")
+    """Run the golden suite and gate on the CLAUDE.md thresholds (incl. cost & cache).
+
+    Replays fixtures/replay/ by default (offline, zero LLM calls). --record runs the
+    live provider and saves each response so CI can replay it forever.
+    """
+    from pr_sentinel.evals.harness import DEFAULT_SUITE_DIR, run_suite
+    from pr_sentinel.evals.report import render_markdown, write_results
+    from pr_sentinel.llm.replay import RecordingProvider
+
+    suite_dir = DEFAULT_SUITE_DIR if suite == "golden" else Path(suite)
+    if not suite_dir.is_dir():
+        typer.echo(f"no such suite directory: {suite_dir}", err=True)
+        raise typer.Exit(code=2)
+
+    if record:
+        settings = get_settings()
+        recorder = RecordingProvider(get_provider(settings))
+        metrics = run_suite(
+            suite_dir, settings.llm_provider, provider_obj=recorder, use_cache=False
+        )
+    else:
+        # Bypass the sqlite response cache so calls/cost reflect the actual replay,
+        # not a stale hit from an earlier run.
+        metrics = run_suite(suite_dir, "replay", use_cache=False)
+
+    markdown = render_markdown(metrics)
+    typer.echo(markdown)
+    results_path = write_results(metrics)
+    typer.echo(f"\nwrote {results_path}")
+
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with Path(step_summary).open("a", encoding="utf-8") as fh:
+            fh.write(markdown + "\n")
+
+    if not metrics.passed:
+        typer.echo("EVAL GATE FAILED: one or more thresholds missed", err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command()

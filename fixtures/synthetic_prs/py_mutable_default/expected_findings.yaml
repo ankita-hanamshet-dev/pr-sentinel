@@ -1,0 +1,16 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; for Phase 5 this documents what a correct review of
+# fixtures/synthetic_prs/py_mutable_default/diff.patch must catch.
+findings:
+  - rule_id: SENTINEL-BUG-021
+    file: app/cart.py
+    line_start: 8
+    line_end: 9
+    severity: medium
+    description: >
+      add_item declares items: list[str] = [] as a default argument. The list
+      literal is evaluated once at function-definition time, so every call that
+      omits items shares the same list object; items.append(item) then mutates
+      that single shared list, and results accumulate across calls (the second
+      caller sees the first caller's items). The fix is the items=None sentinel
+      idiom: default to None and assign a fresh list inside the body.

@@ -1,0 +1,16 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; for Phase 5 this documents what a correct review of
+# fixtures/synthetic_prs/go_sql_injection/diff.patch must catch.
+findings:
+  - rule_id: CWE-89
+    file: store/query.go
+    line_start: 16
+    line_end: 17
+    severity: critical
+    description: >
+      SearchUsers builds a SQL statement with fmt.Sprintf, interpolating the
+      caller-supplied name straight into a single-quoted WHERE clause, then
+      passes the resulting string to s.db.Query with no bound parameters. A name
+      containing a SQL metacharacter (e.g. "'; DROP TABLE users; --" or
+      "x' OR '1'='1") breaks out of the intended literal and injects arbitrary
+      SQL. The fix is a parameterized query: s.db.Query("... WHERE name = ?", name).

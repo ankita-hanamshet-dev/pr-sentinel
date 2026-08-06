@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"src/config.js\", \"line_start\": 11, \"line_end\": 11, \"severity\": \"critical\", \"confidence\": 0.9, \"rule_id\": \"CWE-95\", \"title\": \"evalRule builds a function body by string-concatenating rule.expr (which orig...\", \"fact\": \"evalRule builds a function body by string-concatenating rule.expr (which originates from the user-editable config file) into `new Function(...)` and then invokes it. new Function compiles and executes its string argument as JavaScript with full access to the runtime, so a crafted rule.expr such as \\\"require('child_process').execSync('...')\\\" achieves arbitrary code execution. The expression must be evaluated by a sandboxed parser/allowlist, never by new Function or eval.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"  const fn = new Function(\\\"ctx\\\", \\\"return (\\\" + rule.expr + \\\");\\\");\", \"suggested_patch\": null, \"references\": []}]}",
+  "tokens_in": 648,
+  "tokens_out": 252,
+  "model": "claude-sonnet-5"
+}

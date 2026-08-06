@@ -1,0 +1,16 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; documents what a correct review of
+# fixtures/synthetic_prs/ts_dom_xss/diff.patch must catch.
+findings:
+  - rule_id: CWE-79
+    file: src/render.ts
+    line_start: 13
+    line_end: 13
+    severity: high
+    description: >
+      renderComment assigns the untrusted `raw` argument (a user-submitted
+      comment) directly to el.innerHTML. Browsers parse assigned innerHTML as
+      HTML, so a payload such as "<img src=x onerror=alert(document.cookie)>"
+      executes attacker script in the page origin (DOM-based XSS). The value
+      must be assigned via textContent, or sanitized/escaped before it reaches
+      innerHTML.

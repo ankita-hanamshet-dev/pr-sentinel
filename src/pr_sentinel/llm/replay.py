@@ -51,3 +51,35 @@ class ReplayProvider:
             latency_ms=0,
             model=data["model"],
         )
+
+
+class RecordingProvider:
+    """Wraps a real provider and saves each response as a replay fixture.
+
+    Used by `pr-sentinel eval --record` so a one-time live run makes CI offline
+    forever. The fixture key is the request content hash (same as ReplayProvider),
+    so a later replay run reproduces the recorded response byte for byte.
+    """
+
+    def __init__(self, inner: object, base_dir: Path = _DEFAULT_BASE_DIR) -> None:
+        self._inner = inner
+        self._base_dir = base_dir
+        self.name = f"record:{getattr(inner, 'name', 'provider')}"
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        response: LLMResponse = self._inner.complete(request)  # type: ignore[attr-defined]
+        self._base_dir.mkdir(parents=True, exist_ok=True)
+        fixture = self._base_dir / f"{replay_key(request)}.json"
+        fixture.write_text(
+            json.dumps(
+                {
+                    "text": response.text,
+                    "tokens_in": response.tokens_in,
+                    "tokens_out": response.tokens_out,
+                    "model": response.model,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return response

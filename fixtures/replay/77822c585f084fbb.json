@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"src/render.ts\", \"line_start\": 13, \"line_end\": 13, \"severity\": \"high\", \"confidence\": 0.9, \"rule_id\": \"CWE-79\", \"title\": \"renderComment assigns the untrusted `raw` argument (a user-submitted comment)...\", \"fact\": \"renderComment assigns the untrusted `raw` argument (a user-submitted comment) directly to el.innerHTML. Browsers parse assigned innerHTML as HTML, so a payload such as \\\"<img src=x onerror=alert(document.cookie)>\\\" executes attacker script in the page origin (DOM-based XSS). The value must be assigned via textContent, or sanitized/escaped before it reaches innerHTML.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"  el.innerHTML = raw;\", \"suggested_patch\": null, \"references\": []}]}",
+  "tokens_in": 966,
+  "tokens_out": 212,
+  "model": "claude-sonnet-5"
+}

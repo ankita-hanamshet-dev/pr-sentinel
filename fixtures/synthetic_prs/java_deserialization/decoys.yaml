@@ -1,0 +1,23 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: src/main/java/app/PayloadDecoder.java
+    line_start: 23
+    line_end: 23
+    pattern: 'return objectMapper.readValue(bytes, Dto.class);'
+    why_not_a_finding: >
+      loadDtoTyped deserializes the same untrusted byte[] via Jackson bound to a
+      concrete, closed target type (Dto.class). Unlike native readObject(), this
+      constructs only a Dto and its declared fields -- no arbitrary class is
+      instantiated from the payload, so there is no gadget-chain surface. A
+      reviewer pattern-matching on "deserialize untrusted bytes" would wrongly
+      flag this; typed JSON binding to a fixed class is the recommended safe
+      alternative, not a vulnerability.
+  - file: src/main/java/app/PayloadDecoder.java
+    line_start: 13
+    line_end: 13
+    pattern: 'return objectMapper.readValue(bytes, Dto.class);'
+    why_not_a_finding: >
+      parseJson is pre-existing, unchanged context shown only to locate the
+      hunk. It performs the same safe typed Jackson bind to Dto.class and is not
+      part of this PR's change; it must not be reported.

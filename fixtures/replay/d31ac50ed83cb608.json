@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"src/main/java/app/FileService.java\", \"line_start\": 16, \"line_end\": 17, \"severity\": \"high\", \"confidence\": 0.9, \"rule_id\": \"CWE-22\", \"title\": \"readUserFile resolves the caller-supplied userPath against baseDir and immedi...\", \"fact\": \"readUserFile resolves the caller-supplied userPath against baseDir and immediately reads the result with Files.readAllBytes, with no normalization or containment check. Because Path.resolve does not constrain the result to baseDir, a userPath of \\\"../../etc/passwd\\\" (or an absolute path, which resolve returns verbatim) escapes the base directory and the method returns the bytes of an arbitrary file on disk. This is a classic path-traversal / arbitrary-file-read vulnerability driven by unvalidated user input.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"        Path target = baseDir.resolve(userPath);\\n        return Files.readAllBytes(target);\", \"suggested_patch\": null, \"references\": []}]}",
+  "tokens_in": 1082,
+  "tokens_out": 271,
+  "model": "claude-sonnet-5"
+}

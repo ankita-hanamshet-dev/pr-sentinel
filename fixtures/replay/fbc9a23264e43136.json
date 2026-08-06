@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"src/main/java/app/PayloadDecoder.java\", \"line_start\": 18, \"line_end\": 19, \"severity\": \"critical\", \"confidence\": 0.9, \"rule_id\": \"CWE-502\", \"title\": \"loadObject wraps the caller-supplied byte[] in an ObjectInputStream and calls...\", \"fact\": \"loadObject wraps the caller-supplied byte[] in an ObjectInputStream and calls readObject() on it with no allowlist, resolver, or type checking. Java native deserialization of untrusted bytes lets an attacker instantiate arbitrary classes present on the classpath and drive their readObject/readResolve logic, enabling gadget-chain remote code execution well before any cast in the caller runs. The bytes are attacker-controlled and reach the sink unfiltered, so this is exploitable insecure deserialization.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"        ObjectInputStream objectStream = new ObjectInputStream(byteStream);\\n        return objectStream.readObject();\", \"suggested_patch\": null, \"references\": []}]}",
+  "tokens_in": 773,
+  "tokens_out": 278,
+  "model": "claude-sonnet-5"
+}

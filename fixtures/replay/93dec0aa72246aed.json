@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"app/backup.py\", \"line_start\": 11, \"line_end\": 12, \"severity\": \"critical\", \"confidence\": 0.9, \"rule_id\": \"CWE-78\", \"title\": \"create_backup builds a shell command by string-concatenating the caller-suppl...\", \"fact\": \"create_backup builds a shell command by string-concatenating the caller-supplied repo_dir (and name, via the archive path) into a command string and runs it with subprocess.run(..., shell=True). Because the string is interpreted by the shell, a repo_dir such as \\\"/tmp; rm -rf / #\\\" injects and executes arbitrary OS commands. The fix is to pass an argument list (e.g. [\\\"tar\\\", \\\"-czf\\\", archive, repo_dir]) and drop shell=True so no shell parsing occurs.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"    command = \\\"tar -czf \\\" + archive + \\\" \\\" + repo_dir\\n    subprocess.run(command, shell=True, check=True)\", \"suggested_patch\": null, \"references\": []}], \"drops\": []}",
+  "tokens_in": 883,
+  "tokens_out": 260,
+  "model": "claude-sonnet-5"
+}

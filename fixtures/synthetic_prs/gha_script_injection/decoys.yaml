@@ -1,0 +1,23 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: ci/build.yml
+    line_start: 16
+    line_end: 16
+    pattern: '        run: echo "Reviewing PR titled $TITLE"'
+    why_not_a_finding: >
+      This is the recommended safe pattern. The untrusted PR title is bound to
+      the TITLE environment variable one line above and referenced here only as
+      the quoted shell variable "$TITLE". No ${{ }} expression appears inside the
+      run: body, so nothing is interpolated before the shell runs; the shell
+      receives the title as inert data. A reviewer that flags every step
+      touching the PR title would wrongly report this correct usage.
+  - file: ci/build.yml
+    line_start: 15
+    line_end: 15
+    pattern: '          TITLE: ${{ github.event.pull_request.title }}'
+    why_not_a_finding: >
+      Assigning the untrusted expression to an env: value is the safe sink, not
+      an injection: the value becomes an environment variable and is never
+      spliced into a command line. This is exactly the mitigation the finding on
+      line 12 recommends, so it must not itself be reported as a vulnerability.

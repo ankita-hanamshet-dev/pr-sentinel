@@ -1,0 +1,6 @@
+{
+  "text": "{\"files\": [{\"file\": \"ci/build.yml\", \"language\": \"yaml\", \"risk\": \"high\", \"agents_to_run\": [\"bug\", \"security\", \"style\", \"improvement\"], \"skip_reason\": null}], \"llm_call_budget\": 12}",
+  "tokens_in": 442,
+  "tokens_out": 44,
+  "model": "claude-sonnet-5"
+}

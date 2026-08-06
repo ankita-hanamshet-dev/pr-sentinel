@@ -1,0 +1,21 @@
+diff --git a/src/config.js b/src/config.js
+index 4a1c2de..9f8b7e1 100644
+--- a/src/config.js
++++ b/src/config.js
+@@ -6,4 +6,15 @@ function loadDefaults() {
+   return DEFAULTS;
+ }
+ 
++function evalRule(rule) {
++  // rule.expr comes from the user-editable config file.
++  const fn = new Function("ctx", "return (" + rule.expr + ");");
++  return fn(DEFAULTS);
++}
++
++function parseConfig(raw) {
++  // Structured parse -- reads data, never executes it.
++  return JSON.parse(raw);
++}
++
+-module.exports = { loadDefaults };
++module.exports = { loadDefaults, evalRule, parseConfig };

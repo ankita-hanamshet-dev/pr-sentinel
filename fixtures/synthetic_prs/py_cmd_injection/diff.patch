@@ -1,0 +1,21 @@
+diff --git a/app/backup.py b/app/backup.py
+index 3a1f2b7..c9e04d1 100644
+--- a/app/backup.py
++++ b/app/backup.py
+@@ -6,6 +6,16 @@ def make_archive_path(name: str) -> str:
+     return f"/var/backups/{name}.tar.gz"
+ 
+ 
++def create_backup(repo_dir: str, name: str) -> None:
++    archive = make_archive_path(name)
++    command = "tar -czf " + archive + " " + repo_dir
++    subprocess.run(command, shell=True, check=True)
++
++
++def restore_backup(archive: str, dest: str) -> None:
++    subprocess.run(["tar", "-xzf", archive, "-C", dest], check=True)
++
++
+ def list_backups(directory: str) -> list[str]:
+     result = subprocess.run(["ls", directory], capture_output=True, text=True)
+     return result.stdout.splitlines()

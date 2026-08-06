@@ -1,0 +1,26 @@
+diff --git a/store/query.go b/store/query.go
+index bdd2579..6f53ca3 100644
+--- a/store/query.go
++++ b/store/query.go
+@@ -10,8 +10,21 @@ type Store struct{ db *sql.DB }
+ func (s *Store) UserByID(id int) (*sql.Rows, error) {
+ 	return s.db.Query("SELECT id, name, email FROM users WHERE id = ?", id)
+ }
+ 
++// SearchUsers returns users whose name matches the supplied value.
++func (s *Store) SearchUsers(name string) (*sql.Rows, error) {
++	q := fmt.Sprintf("SELECT id, name, email FROM users WHERE name = '%s'", name)
++	return s.db.Query(q)
++}
++
++// UsersByRole returns users holding the given role, using a bound parameter.
++func (s *Store) UsersByRole(role string) (*sql.Rows, error) {
++	return s.db.Query("SELECT id, name, email FROM users WHERE role = ?", role)
++}
++
++// activeUserFilter is the fixed predicate reused across account queries.
++const activeUserFilter = "deleted_at IS NULL"
+ 
+ func (s *Store) CountUsers() (int, error) {
+ 	row := s.db.QueryRow("SELECT COUNT(*) FROM users")
+ 	var n int

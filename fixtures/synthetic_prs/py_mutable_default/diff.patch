@@ -1,0 +1,21 @@
+diff --git a/app/cart.py b/app/cart.py
+index 7b2c1a4..e5d33f0 100644
+--- a/app/cart.py
++++ b/app/cart.py
+@@ -5,5 +5,16 @@ def total_price(prices: list[float]) -> float:
+     return sum(prices)
+ 
+ 
++def add_item(item: str, items: list[str] = []) -> list[str]:
++    items.append(item)
++    return items
++
++
++def add_items(new: list[str], items: list[str] | None = None) -> list[str]:
++    items = items or []
++    items.extend(new)
++    return items
++
++
+ def clear_cart(cart: list[str]) -> None:
+     cart.clear()

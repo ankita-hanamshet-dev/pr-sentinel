@@ -1,0 +1,23 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: scripts/bootstrap.sh
+    line_start: 11
+    line_end: 11
+    pattern: 'curl -fsSL "$release_url" -o /tmp/tool.tar.gz'
+    why_not_a_finding: >
+      This curl downloads the release tarball to a file with -o and does NOT
+      pipe its output into a shell, so nothing fetched here is executed. It is a
+      plain data download; the bytes are written to /tmp/tool.tar.gz and later
+      unpacked with tar, not run. A naive reviewer pattern-matching on "curl
+      -fsSL" would wrongly flag this, but only the pipe-to-shell on line 7
+      executes remote code. Not a finding.
+  - file: scripts/bootstrap.sh
+    line_start: 14
+    line_end: 14
+    pattern: 'tar -xzf /tmp/tool.tar.gz -C "$tools_dir"'
+    why_not_a_finding: >
+      tar extracts a local file that was already downloaded; it neither fetches
+      remote content nor executes downloaded code. Both variable expansions are
+      double-quoted. This is ordinary, correct unpacking and must not be flagged
+      as remote code execution.

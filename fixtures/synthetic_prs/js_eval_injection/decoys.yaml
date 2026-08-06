@@ -1,0 +1,23 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: src/config.js
+    line_start: 17
+    line_end: 17
+    pattern: 'return JSON.parse(raw);'
+    why_not_a_finding: >
+      parseConfig passes untrusted `raw` to JSON.parse. JSON.parse is a pure
+      data deserializer -- it reads a JSON string into a plain value and never
+      compiles or executes code, unlike eval or new Function. A reviewer who
+      lumps "any parse of user input" together with code-execution sinks would
+      flag this as eval-like; that is a false positive. (Prototype-pollution
+      concerns would require a separate, specific justification and are not
+      present in this fixed-shape usage.)
+  - file: src/config.js
+    line_start: 6
+    line_end: 6
+    pattern: 'return DEFAULTS;'
+    why_not_a_finding: >
+      loadDefaults returns a static object literal defined in-module with no
+      user input involved. Unchanged, pre-existing code included only as
+      leading context in this hunk -- there is nothing to inject or execute.

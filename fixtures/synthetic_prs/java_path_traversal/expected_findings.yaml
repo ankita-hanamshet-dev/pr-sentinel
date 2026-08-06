@@ -1,0 +1,18 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; documents what a correct review of
+# fixtures/synthetic_prs/java_path_traversal/diff.patch must catch.
+findings:
+  - rule_id: CWE-22
+    file: src/main/java/app/FileService.java
+    line_start: 16
+    line_end: 17
+    severity: high
+    description: >
+      readUserFile resolves the caller-supplied userPath against baseDir and
+      immediately reads the result with Files.readAllBytes, with no
+      normalization or containment check. Because Path.resolve does not
+      constrain the result to baseDir, a userPath of "../../etc/passwd" (or an
+      absolute path, which resolve returns verbatim) escapes the base directory
+      and the method returns the bytes of an arbitrary file on disk. This is a
+      classic path-traversal / arbitrary-file-read vulnerability driven by
+      unvalidated user input.

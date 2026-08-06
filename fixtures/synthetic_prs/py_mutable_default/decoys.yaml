@@ -1,0 +1,24 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: app/cart.py
+    line_start: 13
+    line_end: 14
+    pattern: 'items: list[str] | None = None) -> list[str]:'
+    why_not_a_finding: >
+      add_items uses the correct sentinel idiom: the default is None (an
+      immutable, non-shared object), and "items = items or []" binds a fresh
+      list on every call that omits the argument. No state is shared between
+      calls. A naive reviewer that pattern-matches on "a function parameter
+      named items that gets mutated" would wrongly flag this, but it is the
+      recommended fix for the bug above, not a defect.
+  - file: app/cart.py
+    line_start: 20
+    line_end: 20
+    pattern: 'cart.clear()'
+    why_not_a_finding: >
+      clear_cart mutates cart, but cart is a required positional argument
+      supplied by the caller -- not a mutable default -- so there is no
+      shared-object accumulation. Mutating a caller-owned list in place is the
+      documented, intended behaviour here. Unchanged context, included only to
+      frame the hunk; not a finding.

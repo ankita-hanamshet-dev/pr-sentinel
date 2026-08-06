@@ -1,6 +1,6 @@
 {
   "text": "{\"findings\": []}",
-  "tokens_in": 631,
+  "tokens_in": 750,
   "tokens_out": 4,
   "model": "claude-sonnet-5"
 }

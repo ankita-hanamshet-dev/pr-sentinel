@@ -1,0 +1,26 @@
+diff --git a/src/render.ts b/src/render.ts
+index bdd2579..6f53ca3 100644
+--- a/src/render.ts
++++ b/src/render.ts
+@@ -7,7 +7,21 @@ export function escape(s: string): string {
+ export function header(): string {
+   return "<h1>ok</h1>";
+ }
+ 
++export function renderComment(el: HTMLElement, raw: string): void {
++  // Render a user-submitted comment into the DOM.
++  el.innerHTML = raw;
++}
++
++export function renderUsername(el: HTMLElement, raw: string): void {
++  // Escaped, textual assignment -- safe against markup injection.
++  el.textContent = raw;
++}
++
++export function tagElement(el: HTMLElement, raw: string): void {
++  el.setAttribute("data-comment-id", raw);
++}
++
+ export function footer(): string {
+   return "<footer>bye</footer>";
+ }

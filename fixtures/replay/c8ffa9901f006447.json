@@ -1,1 +1,6 @@
-{"text": "{\"files\": [{\"file\": \"app/db.py\", \"language\": \"python\", \"risk\": \"high\", \"agents_to_run\": [\"security\", \"bug\"], \"skip_reason\": null}], \"llm_call_budget\": 12}", "tokens_in": 120, "tokens_out": 60, "model": "claude-sonnet-5"}
+{
+  "text": "{\"files\": [{\"file\": \"app/db.py\", \"language\": \"python\", \"risk\": \"high\", \"agents_to_run\": [\"bug\", \"security\", \"style\", \"improvement\"], \"skip_reason\": null}], \"llm_call_budget\": 12}",
+  "tokens_in": 442,
+  "tokens_out": 44,
+  "model": "claude-sonnet-5"
+}

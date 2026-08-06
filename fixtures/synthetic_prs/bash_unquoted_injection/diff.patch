@@ -1,0 +1,21 @@
+diff --git a/scripts/deploy.sh b/scripts/deploy.sh
+index 3a1f2c4..9e7b6d1 100755
+--- a/scripts/deploy.sh
++++ b/scripts/deploy.sh
+@@ -4,6 +4,16 @@ set -euo pipefail
+ target="$1"
+ build_dir="$2"
+
++cleanup() {
++  # remove staging artifacts for this target
++  rm -rf $target/tmp
++}
++
++safe_cleanup() {
++  # remove build cache
++  rm -rf "$build_dir/cache"
++}
++
+ echo "Deploying to $target"
+ rsync -a ./dist/ "$target/"
+

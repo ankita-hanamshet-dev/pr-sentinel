@@ -1,0 +1,22 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: app/backup.py
+    line_start: 16
+    line_end: 16
+    pattern: 'subprocess.run(["tar", "-xzf", archive, "-C", dest], check=True)'
+    why_not_a_finding: >
+      restore_backup passes an argument list to subprocess.run with no
+      shell=True, so archive and dest are handed to tar as literal argv
+      elements and never parsed by a shell -- there is no command-injection
+      surface. A naive reviewer that flags every subprocess.run call, or that
+      keys on "subprocess" plus attacker-influenced arguments, would wrongly
+      flag this correct, safe invocation.
+  - file: app/backup.py
+    line_start: 20
+    line_end: 20
+    pattern: 'result = subprocess.run(["ls", directory], capture_output=True, text=True)'
+    why_not_a_finding: >
+      list_backups also uses list-argv form with no shell=True; directory is a
+      single argv element, not shell-interpreted. This is unchanged, pre-existing
+      context included only to frame the hunk -- correct and not a finding.

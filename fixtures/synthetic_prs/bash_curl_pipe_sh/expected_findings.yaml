@@ -1,0 +1,18 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; for Phase 5 this documents what a correct review of
+# fixtures/synthetic_prs/bash_curl_pipe_sh/diff.patch must catch.
+findings:
+  - rule_id: CWE-494
+    file: scripts/bootstrap.sh
+    line_start: 7
+    line_end: 7
+    severity: high
+    description: >
+      The script downloads a remote installer with curl and pipes it straight
+      into "bash" ("curl -fsSL https://install.example.com/setup.sh | bash"),
+      executing whatever bytes the server returns without any integrity or
+      authenticity check. There is no pinned checksum, signature, or version, so
+      a compromised or MITM'd endpoint (or DNS hijack) yields arbitrary code
+      execution on the host with the script's privileges. The remote code should
+      be downloaded to a file, verified against a known-good checksum or
+      signature, and only then executed.

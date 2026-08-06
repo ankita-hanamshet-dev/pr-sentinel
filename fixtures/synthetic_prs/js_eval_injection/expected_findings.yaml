@@ -1,0 +1,17 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; documents what a correct review of
+# fixtures/synthetic_prs/js_eval_injection/diff.patch must catch.
+findings:
+  - rule_id: CWE-95
+    file: src/config.js
+    line_start: 11
+    line_end: 11
+    severity: critical
+    description: >
+      evalRule builds a function body by string-concatenating rule.expr (which
+      originates from the user-editable config file) into `new Function(...)`
+      and then invokes it. new Function compiles and executes its string
+      argument as JavaScript with full access to the runtime, so a crafted
+      rule.expr such as "require('child_process').execSync('...')" achieves
+      arbitrary code execution. The expression must be evaluated by a sandboxed
+      parser/allowlist, never by new Function or eval.

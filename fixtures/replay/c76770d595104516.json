@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"scripts/bootstrap.sh\", \"line_start\": 7, \"line_end\": 7, \"severity\": \"high\", \"confidence\": 0.9, \"rule_id\": \"CWE-494\", \"title\": \"The script downloads a remote installer with curl and pipes it straight into ...\", \"fact\": \"The script downloads a remote installer with curl and pipes it straight into \\\"bash\\\" (\\\"curl -fsSL https://install.example.com/setup.sh | bash\\\"), executing whatever bytes the server returns without any integrity or authenticity check. There is no pinned checksum, signature, or version, so a compromised or MITM'd endpoint (or DNS hijack) yields arbitrary code execution on the host with the script's privileges. The remote code should be downloaded to a file, verified against a known-good checksum or signature, and only then executed.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"curl -fsSL https://install.example.com/setup.sh | bash\", \"suggested_patch\": null, \"references\": []}]}",
+  "tokens_in": 646,
+  "tokens_out": 265,
+  "model": "claude-sonnet-5"
+}

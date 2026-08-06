@@ -1,0 +1,30 @@
+diff --git a/src/main/java/app/FileService.java b/src/main/java/app/FileService.java
+index 4a2f0c9..b8d71e5 100644
+--- a/src/main/java/app/FileService.java
++++ b/src/main/java/app/FileService.java
+@@ -1,5 +1,7 @@
+ package app;
+
++import java.io.IOException;
++import java.nio.file.Files;
+ import java.nio.file.Path;
+
+ public class FileService {
+@@ -9,4 +11,17 @@ public class FileService {
+     public FileService(Path baseDir) {
+         this.baseDir = baseDir;
+     }
++
++    public byte[] readUserFile(String userPath) throws IOException {
++        Path target = baseDir.resolve(userPath);
++        return Files.readAllBytes(target);
++    }
++
++    public byte[] readValidatedFile(String userPath) throws IOException {
++        Path target = baseDir.resolve(userPath).normalize();
++        if (!target.startsWith(baseDir)) {
++            throw new IllegalArgumentException("path escapes base directory");
++        }
++        return Files.readAllBytes(target);
++    }
+ }

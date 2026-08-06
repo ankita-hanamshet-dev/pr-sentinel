@@ -1,0 +1,20 @@
+diff --git a/scripts/bootstrap.sh b/scripts/bootstrap.sh
+index 5c2d8a0..b4f1e93 100755
+--- a/scripts/bootstrap.sh
++++ b/scripts/bootstrap.sh
+@@ -3,5 +3,15 @@ set -euo pipefail
+ tools_dir="/opt/tools"
+
+ echo "Installing tooling"
++# install the linter directly from upstream
++curl -fsSL https://install.example.com/setup.sh | bash
++
++# fetch the release tarball for later verification
++release_url="https://dl.example.com/tool-1.4.2.tar.gz"
++curl -fsSL "$release_url" -o /tmp/tool.tar.gz
++
++# unpack into the tools directory
++tar -xzf /tmp/tool.tar.gz -C "$tools_dir"
++
+ echo "Done"
+

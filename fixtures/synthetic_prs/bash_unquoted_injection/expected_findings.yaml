@@ -1,0 +1,18 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; for Phase 5 this documents what a correct review of
+# fixtures/synthetic_prs/bash_unquoted_injection/diff.patch must catch.
+findings:
+  - rule_id: CWE-78
+    file: scripts/deploy.sh
+    line_start: 9
+    line_end: 9
+    severity: high
+    description: >
+      cleanup() runs "rm -rf $target/tmp" with $target left unquoted. Because
+      the expansion is unquoted the shell applies word-splitting and pathname
+      globbing to its value, so a target such as "/ x" or one containing
+      whitespace and metacharacters expands into multiple rm arguments (for
+      example "rm -rf / x/tmp"), letting an attacker who controls the first
+      positional argument delete unintended paths or inject extra targets into
+      the destructive command. The value must be double-quoted: rm -rf
+      "$target/tmp".

@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"bug\", \"file\": \"app/cart.py\", \"line_start\": 8, \"line_end\": 9, \"severity\": \"medium\", \"confidence\": 0.9, \"rule_id\": \"SENTINEL-BUG-021\", \"title\": \"add_item declares items: list[str] = [] as a default argument\", \"fact\": \"add_item declares items: list[str] = [] as a default argument. The list literal is evaluated once at function-definition time, so every call that omits items shares the same list object; items.append(item) then mutates that single shared list, and results accumulate across calls (the second caller sees the first caller's items). The fix is the items=None sentinel idiom: default to None and assign a fresh list inside the body.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"def add_item(item: str, items: list[str] = []) -> list[str]:\\n    items.append(item)\", \"suggested_patch\": null, \"references\": []}], \"drops\": []}",
+  "tokens_in": 814,
+  "tokens_out": 242,
+  "model": "claude-sonnet-5"
+}

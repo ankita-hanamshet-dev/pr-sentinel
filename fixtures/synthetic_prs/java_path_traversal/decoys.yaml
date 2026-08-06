@@ -1,0 +1,23 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: src/main/java/app/FileService.java
+    line_start: 21
+    line_end: 21
+    pattern: 'Path target = baseDir.resolve(userPath).normalize();'
+    why_not_a_finding: >
+      readValidatedFile resolves userPath the same way as the vulnerable method,
+      so it looks identical to a grep, but it then calls normalize() and rejects
+      any result whose canonical form does not start with baseDir
+      (target.startsWith(baseDir)) before reading. That guard collapses "../"
+      segments and enforces containment, so a traversal payload is thrown out
+      with IllegalArgumentException and never reaches Files.readAllBytes. This is
+      the correct, safe pattern and must not be flagged.
+  - file: src/main/java/app/FileService.java
+    line_start: 22
+    line_end: 24
+    pattern: 'if (!target.startsWith(baseDir)) {'
+    why_not_a_finding: >
+      This is the containment check itself -- the mitigating control, not a
+      defect. Flagging the validation guard as a vulnerability would be a false
+      positive.

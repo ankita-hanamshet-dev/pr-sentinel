@@ -1,0 +1,17 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; for Phase 5 this documents what a correct review of
+# fixtures/synthetic_prs/go_ignored_error/diff.patch must catch.
+findings:
+  - rule_id: SENTINEL-BUG-014
+    file: config/report.go
+    line_start: 25
+    line_end: 27
+    severity: high
+    description: >
+      LoadReport discards the error from os.Open with the blank identifier
+      (f, _ := os.Open(path)) and then unconditionally uses f. When the path is
+      missing or unreadable, os.Open returns a nil *os.File together with the
+      error that was thrown away; the immediately following io.ReadAll(f) (and
+      the deferred f.Close()) then dereference that nil handle and panic at
+      runtime instead of returning the error to the caller. The error must be
+      checked and returned before f is used.

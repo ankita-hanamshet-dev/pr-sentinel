@@ -1,0 +1,24 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: src/render.ts
+    line_start: 18
+    line_end: 18
+    pattern: 'el.textContent = raw;'
+    why_not_a_finding: >
+      renderUsername writes the same untrusted `raw` value, but assigns it to
+      textContent, not innerHTML. textContent sets the element's text node
+      verbatim and never parses markup, so no HTML or script can execute. A
+      naive reviewer pattern-matching "raw goes into a DOM element" would flag
+      this alongside the real innerHTML sink; a correct review distinguishes
+      the two DOM APIs.
+  - file: src/render.ts
+    line_start: 22
+    line_end: 22
+    pattern: 'el.setAttribute("data-comment-id", raw);'
+    why_not_a_finding: >
+      tagElement writes `raw` into a data-* attribute via setAttribute. A
+      data attribute value is never interpreted as HTML or JavaScript, and the
+      attribute name is a fixed literal (not attacker-controlled), so there is
+      no XSS sink here. Flagging every use of `raw` regardless of the sink
+      would be a false positive.

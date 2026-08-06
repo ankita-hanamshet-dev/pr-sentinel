@@ -1,0 +1,6 @@
+{
+  "text": "{\"files\": [{\"file\": \"app/cart.py\", \"language\": \"python\", \"risk\": \"high\", \"agents_to_run\": [\"bug\", \"security\", \"style\", \"improvement\"], \"skip_reason\": null}], \"llm_call_budget\": 12}",
+  "tokens_in": 442,
+  "tokens_out": 45,
+  "model": "claude-sonnet-5"
+}

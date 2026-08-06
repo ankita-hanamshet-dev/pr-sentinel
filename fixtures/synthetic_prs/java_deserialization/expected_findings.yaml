@@ -1,0 +1,18 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; documents what a correct review of
+# fixtures/synthetic_prs/java_deserialization/diff.patch must catch.
+findings:
+  - rule_id: CWE-502
+    file: src/main/java/app/PayloadDecoder.java
+    line_start: 18
+    line_end: 19
+    severity: critical
+    description: >
+      loadObject wraps the caller-supplied byte[] in an ObjectInputStream and
+      calls readObject() on it with no allowlist, resolver, or type checking.
+      Java native deserialization of untrusted bytes lets an attacker
+      instantiate arbitrary classes present on the classpath and drive their
+      readObject/readResolve logic, enabling gadget-chain remote code execution
+      well before any cast in the caller runs. The bytes are attacker-controlled
+      and reach the sink unfiltered, so this is exploitable insecure
+      deserialization.

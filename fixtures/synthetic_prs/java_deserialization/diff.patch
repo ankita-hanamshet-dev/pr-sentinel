@@ -1,0 +1,31 @@
+diff --git a/src/main/java/app/PayloadDecoder.java b/src/main/java/app/PayloadDecoder.java
+index 7b1c2ad..e3f9a41 100644
+--- a/src/main/java/app/PayloadDecoder.java
++++ b/src/main/java/app/PayloadDecoder.java
+@@ -1,6 +1,8 @@
+ package app;
+
++import java.io.ByteArrayInputStream;
+ import java.io.IOException;
++import java.io.ObjectInputStream;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+
+ public class PayloadDecoder {
+@@ -10,7 +12,17 @@ public class PayloadDecoder {
+     public Dto parseJson(byte[] bytes) throws IOException {
+         return objectMapper.readValue(bytes, Dto.class);
+     }
+
++    public Object loadObject(byte[] bytes) throws IOException, ClassNotFoundException {
++        ByteArrayInputStream byteStream = new ByteArrayInputStream(bytes);
++        ObjectInputStream objectStream = new ObjectInputStream(byteStream);
++        return objectStream.readObject();
++    }
++
++    public Dto loadDtoTyped(byte[] bytes) throws IOException {
++        return objectMapper.readValue(bytes, Dto.class);
++    }
++
+     public String describe() {
+         return "decoder";
+     }

@@ -1,0 +1,17 @@
+diff --git a/automation/labeler.yml b/automation/labeler.yml
+index 2b3c4d5..6e7f8a9 100644
+--- a/automation/labeler.yml
++++ b/automation/labeler.yml
+@@ -12,3 +12,12 @@ jobs:
+     steps:
+       - uses: actions/checkout@v4
+       - run: echo "labeling"
++      - name: Checkout PR head
++        uses: actions/checkout@v4
++        with:
++          ref: ${{ github.event.pull_request.head.sha }}
++      - name: Build and test PR code
++        run: |
++          npm ci
++          npm run build
++          npm test

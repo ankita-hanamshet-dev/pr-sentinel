@@ -1,0 +1,24 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: config/report.go
+    line_start: 18
+    line_end: 18
+    pattern: 'defer func() { _ = w.Close() }()'
+    why_not_a_finding: >
+      Discarding the error from a deferred Close on a WriteCloser is the
+      idiomatic Go pattern here: the meaningful error is the one returned by
+      enc.Encode(r) on the next lines, and Close is deferred purely to release
+      the handle. Explicitly assigning to "_" documents that the ignore is
+      deliberate (it even satisfies errcheck-style linters). A reviewer that
+      flags every "_ = ...Close()" would be wrong -- this differs fundamentally
+      from LoadReport, where the discarded error guards a handle that is then
+      dereferenced.
+  - file: config/report.go
+    line_start: 20
+    line_end: 20
+    pattern: 'return enc.Encode(r)'
+    why_not_a_finding: >
+      WriteReport correctly propagates the encoder error by returning it to the
+      caller rather than swallowing it. This is the well-behaved counterpart to
+      the planted bug and is included only as surrounding context.

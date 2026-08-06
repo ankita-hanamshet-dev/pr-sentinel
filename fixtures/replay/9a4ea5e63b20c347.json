@@ -1,6 +1,6 @@
 {
   "text": "{\"findings\": [{\"agent\": \"security\", \"file\": \"app/db.py\", \"line_start\": 12, \"line_end\": 13, \"severity\": \"critical\", \"confidence\": 0.9, \"rule_id\": \"CWE-89\", \"title\": \"search_users_by_email builds a SQL query by string-concatenating email_fragme...\", \"fact\": \"search_users_by_email builds a SQL query by string-concatenating email_fragment directly into a LIKE clause instead of using a parameter placeholder, then executes it. A crafted email_fragment containing a SQL metacharacter (e.g. \\\"%' OR '1'='1\\\") escapes the intended query.\", \"assumption\": null, \"impact\": \"Exploitable / incorrect behaviour as described.\", \"recommendation\": \"Remediate per the rule guidance.\", \"evidence_quote\": \"    query = \\\"SELECT * FROM users WHERE email LIKE '%\\\" + email_fragment + \\\"%'\\\"\\n    cursor.execute(query)\", \"suggested_patch\": null, \"references\": []}]}",
-  "tokens_in": 655,
+  "tokens_in": 934,
   "tokens_out": 211,
   "model": "claude-sonnet-5"
 }

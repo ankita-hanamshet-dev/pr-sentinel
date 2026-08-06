@@ -1,0 +1,20 @@
+# Planted defects this diff.patch contains. Used by the eval harness (Phase 8) to
+# compute recall/precision; for Phase 5 this documents what a correct review of
+# fixtures/synthetic_prs/gha_pr_target_checkout/diff.patch must catch.
+findings:
+  - rule_id: SENTINEL-SEC-001
+    file: automation/labeler.yml
+    line_start: 18
+    line_end: 18
+    severity: critical
+    description: >
+      This workflow is triggered by pull_request_target, so it runs in the base
+      repository context with its secrets and a read/write GITHUB_TOKEN. The
+      added "Checkout PR head" step checks out untrusted fork code via
+      ref: ${{ github.event.pull_request.head.sha }}, and the following "Build
+      and test PR code" step executes that checked-out code (npm ci / build /
+      test run attacker-controlled scripts). This is the classic
+      pull_request_target RCE: a fork PR can exfiltrate secrets and push with the
+      privileged token. Untrusted PR code must never be checked out and executed
+      under pull_request_target; use pull_request, or gate execution behind a
+      trusted, code-free job.

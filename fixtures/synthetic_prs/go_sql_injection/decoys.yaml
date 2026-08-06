@@ -1,0 +1,23 @@
+# Correct-looking code in this diff that a naive/overzealous reviewer might still
+# flag. Precision is graded on NOT flagging these (Phase 8 eval harness).
+decoys:
+  - file: store/query.go
+    line_start: 11
+    line_end: 11
+    pattern: 'return s.db.Query("SELECT id, name, email FROM users WHERE id = ?", id)'
+    why_not_a_finding: >
+      UserByID passes the user input as a bound parameter -- the "?" placeholder
+      with id supplied as a separate argument, so the driver never treats id as
+      SQL text. This is unchanged, pre-existing context. A naive grep for
+      "s.db.Query(" would flag every call regardless of parameterization; a real
+      review must distinguish this from the string-built query below it.
+  - file: store/query.go
+    line_start: 22
+    line_end: 22
+    pattern: 'return s.db.Query("SELECT id, name, email FROM users WHERE role = ?", role)'
+    why_not_a_finding: >
+      UsersByRole is newly added code, but it is safe: role is bound through a "?"
+      placeholder rather than concatenated into the query string. It sits two
+      lines below the genuinely vulnerable SearchUsers and is included precisely
+      to test that the reviewer flags the fmt.Sprintf query without sweeping up
+      every nearby Query call in the same PR.
