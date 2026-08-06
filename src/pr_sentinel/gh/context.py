@@ -57,9 +57,7 @@ class PRContext:
         return {f.path: f.hunks for f in self.reviewable_files()}
 
     def changed_lines_by_file(self) -> dict[str, int]:
-        return {
-            f.path: sum(len(added_lines(h)) for h in f.hunks) for f in self.reviewable_files()
-        }
+        return {f.path: sum(len(added_lines(h)) for h in f.hunks) for f in self.reviewable_files()}
 
     def ci_summary(self) -> str:
         """A compact text block of CI results, for the Triage/Bug prompts."""
@@ -101,9 +99,7 @@ def fetch_pr_context(client: GitHubClient, owner: str, repo: str, number: int) -
 
     ci_results: list[CheckResult] = []
     if head_sha:
-        check_body = client.get(
-            f"/repos/{owner}/{repo}/commits/{head_sha}/check-runs"
-        ).json_body
+        check_body = client.get(f"/repos/{owner}/{repo}/commits/{head_sha}/check-runs").json_body
         if isinstance(check_body, dict):
             for run in check_body.get("check_runs", []):
                 if isinstance(run, dict):

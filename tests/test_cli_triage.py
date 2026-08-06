@@ -28,9 +28,7 @@ class _ScriptedProvider:
 
 
 def _hunk(file: str) -> Hunk:
-    return Hunk(
-        file=file, old_start=1, old_len=1, new_start=1, new_len=2, lines=[" a", "+b"]
-    )
+    return Hunk(file=file, old_start=1, old_len=1, new_start=1, new_len=2, lines=[" a", "+b"])
 
 
 def _file(path: str) -> FileDiff:

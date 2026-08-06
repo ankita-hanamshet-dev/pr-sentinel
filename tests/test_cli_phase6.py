@@ -150,10 +150,18 @@ def _link_prompts(tmp_path: Path) -> None:
 
 def _context(hunks: list[dict[str, object]]) -> dict[str, object]:
     return {
-        "pr_number": 7, "head_sha": "abc", "model": "m", "diff_text": "d",
-        "hunks": hunks, "changed_lines_by_file": {"app/db.py": 1}, "languages": {},
-        "triage": [], "prompt_versions": {"triage": "1"},
-        "max_diff_lines": 5000, "diff_lines": 3, "confidence_floor": 0.55,
+        "pr_number": 7,
+        "head_sha": "abc",
+        "model": "m",
+        "diff_text": "d",
+        "hunks": hunks,
+        "changed_lines_by_file": {"app/db.py": 1},
+        "languages": {},
+        "triage": [],
+        "prompt_versions": {"triage": "1"},
+        "max_diff_lines": 5000,
+        "diff_lines": 3,
+        "confidence_floor": 0.55,
     }
 
 
@@ -187,19 +195,38 @@ def test_aggregate_fanin_merges_agents_and_errors(
     get_settings.cache_clear()
 
     hunk = Hunk(
-        file="app/db.py", old_start=1, old_len=2, new_start=1, new_len=3,
+        file="app/db.py",
+        old_start=1,
+        old_len=2,
+        new_start=1,
+        new_len=3,
         lines=[" import os", "+import sys", " x = 1"],
     )
     Path("context.json").write_text(json.dumps(_context([hunk.model_dump(mode="json")])))
-    Path("agent-bug.json").write_text(json.dumps({
-        "agent": "bug", "findings": [{**_finding_json(), "agent": "bug"}], "errors": [],
-        "injection_detected": False, "budget_used": 1, "prompt_version": "1",
-    }))
-    Path("agent-security.json").write_text(json.dumps({
-        "agent": "security", "findings": [_finding_json()],
-        "errors": ["security agent inference failed: boom"],
-        "injection_detected": False, "budget_used": 1, "prompt_version": "1",
-    }))
+    Path("agent-bug.json").write_text(
+        json.dumps(
+            {
+                "agent": "bug",
+                "findings": [{**_finding_json(), "agent": "bug"}],
+                "errors": [],
+                "injection_detected": False,
+                "budget_used": 1,
+                "prompt_version": "1",
+            }
+        )
+    )
+    Path("agent-security.json").write_text(
+        json.dumps(
+            {
+                "agent": "security",
+                "findings": [_finding_json()],
+                "errors": ["security agent inference failed: boom"],
+                "injection_detected": False,
+                "budget_used": 1,
+                "prompt_version": "1",
+            }
+        )
+    )
     try:
         cli.aggregate(
             context="context.json",

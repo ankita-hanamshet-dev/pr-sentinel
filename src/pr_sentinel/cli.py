@@ -655,8 +655,13 @@ def check_start(
     check_run_id = 0
     try:
         check_run_id = start_check_run(
-            client, owner, name, sha,
-            details_url=details_url or None, run_id=uuid.uuid4().hex[:12], audit=audit,
+            client,
+            owner,
+            name,
+            sha,
+            details_url=details_url or None,
+            run_id=uuid.uuid4().hex[:12],
+            audit=audit,
         )
     except GitHubError as exc:
         typer.echo(f"could not create in-progress check (continuing): {exc}", err=True)
@@ -683,9 +688,15 @@ def check_fail(
     audit = AuditLog(DEFAULT_AUDIT_PATH)
     try:
         fail_check_run(
-            client, owner, name, check_run_id, sha,
-            summary=summary, details_url=details_url or None,
-            run_id=uuid.uuid4().hex[:12], audit=audit,
+            client,
+            owner,
+            name,
+            check_run_id,
+            sha,
+            summary=summary,
+            details_url=details_url or None,
+            run_id=uuid.uuid4().hex[:12],
+            audit=audit,
         )
     except GitHubError as exc:
         typer.echo(f"could not update check to failure: {exc}", err=True)

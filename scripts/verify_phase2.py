@@ -159,9 +159,7 @@ CASES.append(
     )
 )
 CASES.append(("single_line", {}, {"one.py": b"only_line = True"}, None))
-CASES.append(
-    ("only_deletions", {"del.py": numbered(5, "d")}, {"del.py": b"d_1\nd_4\nd_5\n"}, None)
-)
+CASES.append(("only_deletions", {"del.py": numbered(5, "d")}, {"del.py": b"d_1\nd_4\nd_5\n"}, None))
 CASES.append(("empty", {"same.py": b"unchanged\n"}, {"same.py": b"unchanged\n"}, None))
 CASES.append(
     (

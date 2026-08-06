@@ -53,18 +53,14 @@ def test_unknown_gets_conservative_coverage_not_empty() -> None:
 
 def test_oversized_diff_marks_every_file_unknown() -> None:
     inputs = [_inp("app/auth/login.py"), _inp("tests/test_x.py"), _inp("app/util.py")]
-    plan = heuristic_triage(
-        inputs, call_budget=12, max_diff_lines=500, total_diff_lines=900
-    )
+    plan = heuristic_triage(inputs, call_budget=12, max_diff_lines=500, total_diff_lines=900)
     assert {fp.risk for fp in plan.files} == {"unknown"}
     assert plan.llm_call_budget == 12
 
 
 def test_normal_diff_classifies_per_file() -> None:
     inputs = [_inp("app/auth/login.py"), _inp("tests/test_x.py"), _inp("app/util.py")]
-    plan = heuristic_triage(
-        inputs, call_budget=12, max_diff_lines=5000, total_diff_lines=30
-    )
+    plan = heuristic_triage(inputs, call_budget=12, max_diff_lines=5000, total_diff_lines=30)
     by_file = {fp.file: fp.risk for fp in plan.files}
     assert by_file == {
         "app/auth/login.py": "high",

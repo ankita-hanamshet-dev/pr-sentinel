@@ -131,12 +131,8 @@ def test_upsert_summary_updates_when_marker_present(httpx_mock: HTTPXMock, tmp_p
     assert any(r.method == "PATCH" for r in httpx_mock.get_requests())
 
 
-def test_publish_report_posts_one_review_and_audits(
-    httpx_mock: HTTPXMock, tmp_path: Path
-) -> None:
-    httpx_mock.add_response(
-        method="POST", url=f"{BASE}/repos/o/r/pulls/7/reviews", json={"id": 5}
-    )
+def test_publish_report_posts_one_review_and_audits(httpx_mock: HTTPXMock, tmp_path: Path) -> None:
+    httpx_mock.add_response(method="POST", url=f"{BASE}/repos/o/r/pulls/7/reviews", json={"id": 5})
     httpx_mock.add_response(method="GET", url=COMMENTS_URL, json=[])
     httpx_mock.add_response(
         method="POST", url=f"{BASE}/repos/o/r/issues/7/comments", json={"id": 6}
@@ -146,8 +142,15 @@ def test_publish_report_posts_one_review_and_audits(
     audit = AuditLog(audit_path)
 
     result = publish_report(
-        _client(), "o", "r", 7, _report([_finding()]),
-        max_comments=25, author="octocat", run_id="run", audit=audit,
+        _client(),
+        "o",
+        "r",
+        7,
+        _report([_finding()]),
+        max_comments=25,
+        author="octocat",
+        run_id="run",
+        audit=audit,
     )
     assert result.comments_posted == 1
     assert result.summary_action == "created"
@@ -170,8 +173,13 @@ def test_start_check_run_creates_in_progress_and_returns_id(
     httpx_mock.add_response(method="POST", url=f"{BASE}/repos/o/r/check-runs", json={"id": 42})
     audit = AuditLog(tmp_path / "audit.jsonl")
     cid = start_check_run(
-        _client(), "o", "r", "deadbeef",
-        details_url="https://runs/9", run_id="run", audit=audit,
+        _client(),
+        "o",
+        "r",
+        "deadbeef",
+        details_url="https://runs/9",
+        run_id="run",
+        audit=audit,
     )
     assert cid == 42
     req = httpx_mock.get_requests()[0]
@@ -181,12 +189,8 @@ def test_start_check_run_creates_in_progress_and_returns_id(
     assert body["details_url"] == "https://runs/9"
 
 
-def test_publish_updates_early_check_run_in_place(
-    httpx_mock: HTTPXMock, tmp_path: Path
-) -> None:
-    httpx_mock.add_response(
-        method="POST", url=f"{BASE}/repos/o/r/pulls/7/reviews", json={"id": 5}
-    )
+def test_publish_updates_early_check_run_in_place(httpx_mock: HTTPXMock, tmp_path: Path) -> None:
+    httpx_mock.add_response(method="POST", url=f"{BASE}/repos/o/r/pulls/7/reviews", json={"id": 5})
     httpx_mock.add_response(method="GET", url=COMMENTS_URL, json=[])
     httpx_mock.add_response(
         method="POST", url=f"{BASE}/repos/o/r/issues/7/comments", json={"id": 6}
@@ -196,9 +200,17 @@ def test_publish_updates_early_check_run_in_place(
     audit_path = tmp_path / "audit.jsonl"
 
     publish_report(
-        _client(), "o", "r", 7, _report([_finding()]),
-        max_comments=25, author="octocat", run_id="run", audit=AuditLog(audit_path),
-        check_run_id=42, details_url="https://runs/9",
+        _client(),
+        "o",
+        "r",
+        7,
+        _report([_finding()]),
+        max_comments=25,
+        author="octocat",
+        run_id="run",
+        audit=AuditLog(audit_path),
+        check_run_id=42,
+        details_url="https://runs/9",
     )
     methods = {(r.method, r.url.path) for r in httpx_mock.get_requests()}
     assert ("PATCH", "/repos/o/r/check-runs/42") in methods
@@ -211,9 +223,15 @@ def test_fail_check_run_marks_failure(httpx_mock: HTTPXMock, tmp_path: Path) -> 
     httpx_mock.add_response(method="PATCH", url=f"{BASE}/repos/o/r/check-runs/42", json={"id": 42})
     audit_path = tmp_path / "audit.jsonl"
     fail_check_run(
-        _client(), "o", "r", 42, "deadbeef",
-        summary="The review could not be completed.", details_url="https://runs/9",
-        run_id="run", audit=AuditLog(audit_path),
+        _client(),
+        "o",
+        "r",
+        42,
+        "deadbeef",
+        summary="The review could not be completed.",
+        details_url="https://runs/9",
+        run_id="run",
+        audit=AuditLog(audit_path),
     )
     body = json.loads(httpx_mock.get_requests()[0].content)
     assert body["status"] == "completed"
@@ -241,16 +259,19 @@ def test_summary_body_collapses_remainder_and_reports_suppressed() -> None:
     assert "suppressed" in body
 
 
-def test_post_review_suppresses_beyond_max_comments(
-    httpx_mock: HTTPXMock, tmp_path: Path
-) -> None:
-    httpx_mock.add_response(
-        method="POST", url=f"{BASE}/repos/o/r/pulls/7/reviews", json={"id": 1}
-    )
+def test_post_review_suppresses_beyond_max_comments(httpx_mock: HTTPXMock, tmp_path: Path) -> None:
+    httpx_mock.add_response(method="POST", url=f"{BASE}/repos/o/r/pulls/7/reviews", json={"id": 1})
     findings = [_finding(rule_id=f"R{i}", line_start=i) for i in range(1, 4)]
     posted, suppressed = post_review(
-        _client(), "o", "r", 7, _report(findings),
-        max_comments=1, author=None, run_id="run", audit=AuditLog(tmp_path / "a.jsonl"),
+        _client(),
+        "o",
+        "r",
+        7,
+        _report(findings),
+        max_comments=1,
+        author=None,
+        run_id="run",
+        audit=AuditLog(tmp_path / "a.jsonl"),
     )
     assert posted == 1
     assert suppressed == 2

@@ -322,8 +322,7 @@ def create_check_run(
     POST a fresh completed one. failure only on a critical finding."""
     conclusion = check_run_conclusion(report)
     summary = (
-        f"Score {report.score:.0f}/100, {len(report.findings)} finding(s)."
-        f"{_link_line(details_url)}"
+        f"Score {report.score:.0f}/100, {len(report.findings)} finding(s).{_link_line(details_url)}"
     )
     payload: dict[str, object] = {
         "name": CHECK_RUN_NAME,
@@ -371,18 +370,37 @@ def publish_report(
     completed in place instead of a new one being created.
     """
     posted, suppressed = post_review(
-        client, owner, repo, number, report,
-        max_comments=max_comments, author=author, run_id=run_id, audit=audit,
+        client,
+        owner,
+        repo,
+        number,
+        report,
+        max_comments=max_comments,
+        author=author,
+        run_id=run_id,
+        audit=audit,
     )
     summary_text = summary_body(report, suppressed=suppressed)
     if details_url:
         summary_text += f"\n\n<sub>[Full review run]({details_url})</sub>"
     action = upsert_summary(
-        client, owner, repo, number, summary_text, run_id=run_id, audit=audit,
+        client,
+        owner,
+        repo,
+        number,
+        summary_text,
+        run_id=run_id,
+        audit=audit,
     )
     conclusion = create_check_run(
-        client, owner, repo, report,
-        run_id=run_id, audit=audit, check_run_id=check_run_id, details_url=details_url,
+        client,
+        owner,
+        repo,
+        report,
+        run_id=run_id,
+        audit=audit,
+        check_run_id=check_run_id,
+        details_url=details_url,
     )
     return PublishResult(
         comments_posted=posted,

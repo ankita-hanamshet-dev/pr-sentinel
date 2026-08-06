@@ -73,8 +73,12 @@ def test_governor_counts_a_cache_hit(httpx_mock: HTTPXMock) -> None:
     call_llm(
         AnthropicProvider(model="claude-sonnet-5", api_key="sk"),
         LLMRequest(system="s", user="u", max_output_tokens=8, cache_system=True),
-        cache=None, governor=governor, provider_name="anthropic",
-        model="claude-sonnet-5", prompt_version="v1", agent="bug",
+        cache=None,
+        governor=governor,
+        provider_name="anthropic",
+        model="claude-sonnet-5",
+        prompt_version="v1",
+        agent="bug",
     )
     snap = governor.snapshot()
     assert snap["cache_hits"] == 1
