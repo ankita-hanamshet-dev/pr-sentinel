@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Any, NoReturn
 
 import typer
 
@@ -29,13 +30,22 @@ from pr_sentinel.core.scoring import (
     partition_by_confidence,
     pr_score,
 )
+from pr_sentinel.gh.client import GitHubClient, GitHubError
+from pr_sentinel.gh.context import PRContext, fetch_pr_context
 from pr_sentinel.gh.diff import FileDiff, added_lines, parse_diff
+from pr_sentinel.gh.history import TeamConventions
+from pr_sentinel.gh.publish import publish_report
+from pr_sentinel.graph.build import run_aggregate_pipeline
 from pr_sentinel.guardrails.policy import is_ignored_path
 from pr_sentinel.llm.budget import BudgetExhausted, BudgetGovernor
 from pr_sentinel.llm.cache import LLMCache
 from pr_sentinel.llm.provider import LLMError, LLMRequest, call_llm, get_provider
 from pr_sentinel.models import Finding, Hunk, ReviewReport
-from pr_sentinel.settings import get_settings
+from pr_sentinel.settings import Settings, get_settings
+
+DEFAULT_PAYLOAD_PATH = "review-payload.json"
+DEFAULT_META_PATH = "pr-meta.json"
+DEFAULT_BUNDLE_PATH = "analysis-bundle.json"
 
 _CHUNK_AGENT_CLASSES: dict[str, type[ChunkAgent]] = {
     "bug": BugAgent,
@@ -58,34 +68,275 @@ def _pending(command: str, phase: str) -> NoReturn:
     raise typer.Exit(code=1)
 
 
+def _split_repo(repo: str) -> tuple[str, str]:
+    owner, _, name = repo.partition("/")
+    if not owner or not name:
+        typer.echo(f"--repo must be owner/name, got {repo!r}", err=True)
+        raise typer.Exit(code=1)
+    return owner, name
+
+
+def _require_token() -> str:
+    token = get_settings().github_token
+    if not token:
+        typer.echo("GITHUB_TOKEN is not set (needed to read the PR / post the review).", err=True)
+        raise typer.Exit(code=1)
+    return token
+
+
+def _agent_env(
+    provider_override: str | None,
+) -> tuple[Settings, object, BudgetGovernor, str, dict[str, object]]:
+    """Build the shared LLM environment (settings, provider, governor, run_id, kwargs)."""
+    settings = get_settings()
+    if provider_override:
+        settings = settings.model_copy(update={"llm_provider": provider_override})
+    provider = get_provider(settings)
+    governor = BudgetGovernor(settings)
+    cache = LLMCache(path=Path(".sentinel/cache.sqlite"), ttl_days=settings.cache_ttl_days)
+    AuditLog(DEFAULT_AUDIT_PATH)  # ensures .sentinel/ exists
+    run_id = uuid.uuid4().hex[:12]
+    agent_kwargs: dict[str, object] = {
+        "cache": cache,
+        "governor": governor,
+        "provider_name": settings.llm_provider,
+        "model": settings.model,
+        "max_output_tokens": settings.max_output_tokens,
+        "run_id": run_id,
+    }
+    return settings, provider, governor, run_id, agent_kwargs
+
+
+def _run_analyze(
+    ctx: PRContext, provider_override: str | None
+) -> tuple[ReviewReport, dict[str, object]]:
+    """Triage -> specialists -> LangGraph aggregate. Returns the report and a re-usable bundle."""
+    start = time.perf_counter()
+    settings, provider, governor, _run_id, agent_kwargs = _agent_env(provider_override)
+
+    hunks_by_file = ctx.hunks_by_file()
+    all_hunks = [hunk for hunks in hunks_by_file.values() for hunk in hunks]
+    changed_file_paths = frozenset(hunks_by_file)
+
+    triage_agent = TriageAgent(provider, **agent_kwargs)  # type: ignore[arg-type]
+    triage_plan = triage_agent.plan(
+        call_budget=settings.max_llm_calls_per_run,
+        files_summary=ctx.files_summary(),
+        pr_metadata=f"{ctx.title}\n\n{ctx.body}".strip(),
+        ci_results=ctx.ci_summary(),
+        file_paths=list(hunks_by_file),
+        languages=ctx.languages,
+    )
+    prompt_versions: dict[str, str] = {"triage": triage_agent.prompt_version}
+    findings, injection, budget_ex, agent_error_lists = _collect_findings(
+        provider,
+        agent_kwargs,
+        triage_plan=triage_plan,
+        hunks_by_file=hunks_by_file,
+        changed_file_paths=changed_file_paths,
+        prompt_versions=prompt_versions,
+    )
+    agent_errors = {role: "; ".join(msgs) for role, msgs in agent_error_lists.items() if msgs}
+    changed_lines_by_file = ctx.changed_lines_by_file()
+    diff_lines = sum(len(hunk.lines) for hunk in all_hunks)
+
+    critic_agent = CriticAgent(provider, **agent_kwargs)  # type: ignore[arg-type]
+    prompt_versions["critic"] = critic_agent.prompt_version
+    report = run_aggregate_pipeline(
+        critic_agent,
+        diff_text=ctx.diff_text,
+        pr_number=ctx.number,
+        head_sha=ctx.head_sha,
+        model=settings.model,
+        raw_findings=findings,
+        hunks=all_hunks,
+        changed_lines_by_file=changed_lines_by_file,
+        max_diff_lines=settings.max_diff_lines,
+        diff_lines=diff_lines,
+        confidence_floor=settings.confidence_floor,
+        injection_detected=injection,
+        budget_exhausted=budget_ex,
+        prompt_versions=prompt_versions,
+        agent_errors=agent_errors,
+        budget_used=0,
+    )
+    budget_used = governor.snapshot()["calls_used"]
+    report = report.model_copy(
+        update={
+            "budget_used": budget_used,
+            "duration_ms": int((time.perf_counter() - start) * 1000),
+        }
+    )
+    bundle: dict[str, object] = {
+        "pr_number": ctx.number,
+        "head_sha": ctx.head_sha,
+        "model": settings.model,
+        "diff_text": ctx.diff_text,
+        "raw_findings": [f.model_dump(mode="json") for f in findings],
+        "hunks": [h.model_dump(mode="json") for h in all_hunks],
+        "changed_lines_by_file": changed_lines_by_file,
+        "max_diff_lines": settings.max_diff_lines,
+        "diff_lines": diff_lines,
+        "confidence_floor": settings.confidence_floor,
+        "injection_detected": injection,
+        "budget_exhausted": budget_ex,
+        "prompt_versions": prompt_versions,
+        "agent_errors": agent_errors,
+        "budget_used": budget_used,
+    }
+    return report, bundle
+
+
+def _aggregate_from_bundle(data: dict[str, Any], critic_agent: CriticAgent) -> ReviewReport:
+    """Run the LangGraph aggregate over a serialized analysis bundle (the fan-in step)."""
+    raw_findings = [Finding.model_validate(f) for f in data["raw_findings"]]
+    hunks = [Hunk.model_validate(h) for h in data["hunks"]]
+    return run_aggregate_pipeline(
+        critic_agent,
+        diff_text=str(data.get("diff_text", "")),
+        pr_number=int(data["pr_number"]),
+        head_sha=str(data["head_sha"]),
+        model=str(data["model"]),
+        raw_findings=raw_findings,
+        hunks=hunks,
+        changed_lines_by_file=dict(data.get("changed_lines_by_file", {})),
+        max_diff_lines=int(data.get("max_diff_lines", 5000)),
+        diff_lines=int(data.get("diff_lines", 0)),
+        confidence_floor=float(data.get("confidence_floor", 0.55)),
+        injection_detected=bool(data.get("injection_detected", False)),
+        budget_exhausted=bool(data.get("budget_exhausted", False)),
+        prompt_versions=dict(data.get("prompt_versions", {})),
+        agent_errors=dict(data.get("agent_errors", {})),
+        budget_used=int(data.get("budget_used", 0)),
+    )
+
+
 @app.command()
 def analyze(
     repo: Annotated[str, typer.Option(help="owner/name of the repository")],
     pr: Annotated[int, typer.Option(help="pull request number")],
     dry_run: Annotated[bool, typer.Option("--dry-run", help="write payload, do not post")] = False,
+    provider: Annotated[str, typer.Option(help="LLM provider override")] = "",
+    out: Annotated[str, typer.Option(help="review payload output path")] = DEFAULT_PAYLOAD_PATH,
 ) -> None:
     """Run the specialist agents over a PR diff and emit a review payload."""
-    _pending("analyze", "Phase 6")
+    owner, name = _split_repo(repo)
+    client = GitHubClient(_require_token())
+    try:
+        ctx = fetch_pr_context(client, owner, name, pr)
+    except GitHubError as exc:
+        typer.echo(f"failed to fetch PR: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        TeamConventions.from_github(client, owner, name)  # writes team_conventions.md (best effort)
+    except GitHubError as exc:
+        typer.echo(f"note: could not mine review history: {exc}", err=True)
+
+    try:
+        report, bundle = _run_analyze(ctx, provider or None)
+    except LLMError as exc:
+        typer.echo(f"LLM call failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    Path(out).write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    Path(DEFAULT_META_PATH).write_text(
+        json.dumps({"pr_number": ctx.number, "head_sha": ctx.head_sha}), encoding="utf-8"
+    )
+    Path(DEFAULT_BUNDLE_PATH).write_text(json.dumps(bundle), encoding="utf-8")
+    typer.echo(
+        f"wrote {out} (score {report.score:.0f}/100, {len(report.findings)} findings, "
+        f"needs_human_review={report.needs_human_review})"
+    )
+
+    if dry_run:
+        typer.echo("--dry-run: not posting.")
+        return
+    audit = AuditLog(DEFAULT_AUDIT_PATH)
+    result = publish_report(
+        client,
+        owner,
+        name,
+        ctx.number,
+        report,
+        max_comments=get_settings().max_comments,
+        author=ctx.author,
+        run_id=uuid.uuid4().hex[:12],
+        audit=audit,
+    )
+    typer.echo(
+        f"published: {result.comments_posted} comments, summary {result.summary_action}, "
+        f"check {result.check_conclusion}"
+    )
 
 
 @app.command()
 def aggregate(
-    payload: Annotated[
-        str, typer.Option(help="path for the merged payload")
-    ] = "review-payload.json",
+    bundle: Annotated[str, typer.Option(help="analysis bundle input path")] = DEFAULT_BUNDLE_PATH,
+    out: Annotated[str, typer.Option(help="review payload output path")] = DEFAULT_PAYLOAD_PATH,
+    provider: Annotated[str, typer.Option(help="LLM provider override")] = "",
 ) -> None:
-    """Merge per-agent artifacts through the grounding/critic/scoring pipeline."""
-    _pending("aggregate", "Phase 6")
+    """Merge the analysis bundle through the grounding/critic/scoring pipeline."""
+    bundle_path = Path(bundle)
+    if not bundle_path.exists():
+        typer.echo(f"no bundle found at {bundle_path}", err=True)
+        raise typer.Exit(code=1)
+    data = json.loads(bundle_path.read_text(encoding="utf-8"))
+
+    _settings, provider_obj, governor, _run_id, agent_kwargs = _agent_env(provider or None)
+    critic_agent = CriticAgent(provider_obj, **agent_kwargs)  # type: ignore[arg-type]
+    try:
+        report = _aggregate_from_bundle(data, critic_agent)
+    except LLMError as exc:
+        typer.echo(f"LLM call failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    report = report.model_copy(update={"budget_used": governor.snapshot()["calls_used"]})
+
+    Path(out).write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"wrote {out} (score {report.score:.0f}/100, {len(report.findings)} findings)")
 
 
 @app.command()
 def publish(
     repo: Annotated[str, typer.Option(help="owner/name of the repository")],
     pr: Annotated[int, typer.Option(help="pull request number")],
-    payload: Annotated[str, typer.Option(help="review payload to publish")] = "review-payload.json",
+    payload: Annotated[str, typer.Option(help="review payload to publish")] = DEFAULT_PAYLOAD_PATH,
 ) -> None:
     """Post the consolidated review, summary comment, and check run to a PR."""
-    _pending("publish", "Phase 6")
+    owner, name = _split_repo(repo)
+    payload_path = Path(payload)
+    if not payload_path.exists():
+        typer.echo(f"no payload found at {payload_path}", err=True)
+        raise typer.Exit(code=1)
+    report = ReviewReport.model_validate_json(payload_path.read_text(encoding="utf-8"))
+
+    number = pr
+    meta_path = Path(DEFAULT_META_PATH)
+    if meta_path.exists():  # trust pr-meta.json over the branch/arg (CLAUDE.md)
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        number = int(meta.get("pr_number", pr))
+
+    client = GitHubClient(_require_token())
+    audit = AuditLog(DEFAULT_AUDIT_PATH)
+    try:
+        result = publish_report(
+            client,
+            owner,
+            name,
+            number,
+            report,
+            max_comments=get_settings().max_comments,
+            author=None,
+            run_id=uuid.uuid4().hex[:12],
+            audit=audit,
+        )
+    except GitHubError as exc:
+        typer.echo(f"failed to publish: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"published: {result.comments_posted} comments ({result.comments_suppressed} suppressed), "
+        f"summary {result.summary_action}, check {result.check_conclusion}"
+    )
 
 
 def _snippet(hunks: list[Hunk]) -> str:
@@ -111,6 +362,60 @@ def _build_files_summary(files: list[FileDiff], languages: dict[str, str]) -> st
             f"{added} added lines)"
         )
     return "\n".join(lines) or "(no files changed)"
+
+
+def _collect_findings(
+    provider: object,
+    agent_kwargs: dict[str, object],
+    *,
+    triage_plan: object,
+    hunks_by_file: dict[str, list[Hunk]],
+    changed_file_paths: frozenset[str],
+    prompt_versions: dict[str, str],
+) -> tuple[list[Finding], bool, bool, dict[str, list[str]]]:
+    """Run each triaged file through its assigned specialists. Shared by local + analyze.
+
+    Returns (findings, injection_detected, budget_exhausted, per-agent error lists).
+    `prompt_versions` is mutated in place with each specialist's prompt version.
+    """
+    findings: list[Finding] = []
+    agent_error_lists: dict[str, list[str]] = defaultdict(list)
+    injection_detected = False
+    budget_exhausted = False
+
+    for file_plan in triage_plan.files:  # type: ignore[attr-defined]
+        if file_plan.skip_reason is not None:
+            continue
+        hunks = hunks_by_file.get(file_plan.file, [])
+        if not hunks:
+            continue
+        chunks = chunk_hunks(hunks, max_tokens=budget_from_settings())
+        for role in file_plan.agents_to_run:
+            agent_cls = _CHUNK_AGENT_CLASSES.get(role)
+            if agent_cls is None:
+                continue
+            agent = agent_cls(provider, **agent_kwargs)  # type: ignore[arg-type]
+            prompt_versions[role] = agent.prompt_version
+            for chunk in chunks:
+                try:
+                    if role == "style":
+                        outcome = agent.review(
+                            chunk,
+                            language=file_plan.language,
+                            changed_file_paths=changed_file_paths,
+                        )
+                    else:
+                        outcome = agent.review(chunk, language=file_plan.language)
+                except BudgetExhausted:
+                    budget_exhausted = True
+                    continue
+                findings.extend(outcome.findings)
+                findings.extend(outcome.injection_findings)
+                findings.extend(outcome.redaction_findings)
+                if outcome.injection_findings:
+                    injection_detected = True
+                agent_error_lists[role].extend(outcome.errors)
+    return findings, injection_detected, budget_exhausted, agent_error_lists
 
 
 def _run_local_review(
@@ -159,44 +464,15 @@ def _run_local_review(
         languages=languages,
     )
 
-    findings: list[Finding] = []
-    agent_error_lists: dict[str, list[str]] = defaultdict(list)
-    injection_detected = False
-    budget_exhausted = False
     prompt_versions: dict[str, str] = {"triage": triage_agent.prompt_version}
-
-    for file_plan in triage_plan.files:
-        if file_plan.skip_reason is not None:
-            continue
-        hunks = hunks_by_file.get(file_plan.file, [])
-        if not hunks:
-            continue
-        chunks = chunk_hunks(hunks, max_tokens=budget_from_settings())
-        for role in file_plan.agents_to_run:
-            agent_cls = _CHUNK_AGENT_CLASSES.get(role)
-            if agent_cls is None:
-                continue
-            agent = agent_cls(provider, **agent_kwargs)  # type: ignore[arg-type]
-            prompt_versions[role] = agent.prompt_version
-            for chunk in chunks:
-                try:
-                    if role == "style":
-                        outcome = agent.review(
-                            chunk,
-                            language=file_plan.language,
-                            changed_file_paths=changed_file_paths,
-                        )
-                    else:
-                        outcome = agent.review(chunk, language=file_plan.language)
-                except BudgetExhausted:
-                    budget_exhausted = True
-                    continue
-                findings.extend(outcome.findings)
-                findings.extend(outcome.injection_findings)
-                findings.extend(outcome.redaction_findings)
-                if outcome.injection_findings:
-                    injection_detected = True
-                agent_error_lists[role].extend(outcome.errors)
+    findings, injection_detected, budget_exhausted, agent_error_lists = _collect_findings(
+        provider,
+        agent_kwargs,
+        triage_plan=triage_plan,
+        hunks_by_file=hunks_by_file,
+        changed_file_paths=changed_file_paths,
+        prompt_versions=prompt_versions,
+    )
 
     merged_findings, _corroboration = dedup_findings(findings)
     kept_findings, rejects = ground_findings(merged_findings, all_hunks)
