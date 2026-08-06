@@ -95,6 +95,39 @@ def test_budget_refuses_call_n_plus_1_before_any_http_call(httpx_mock: HTTPXMock
     assert exc_info.value.reason == "max_calls_per_run"
 
 
+def test_budget_dollar_cap_is_the_hard_stop(httpx_mock: HTTPXMock) -> None:
+    # One call bills 1000 output tokens = $0.015 at sonnet-5's $15/Mtok, which
+    # already exceeds the $0.001 cap, so the SECOND reserve() is refused on dollars
+    # even though the calls cap (12) has plenty of room left.
+    httpx_mock.add_response(url=ANTHROPIC_URL, json=_anthropic_json("pong", 10, 1000))
+
+    settings = Settings(
+        llm_provider="anthropic",
+        model="claude-sonnet-5",
+        llm_api_key="sk-test",
+        max_usd_per_run=0.001,
+    )
+    provider = AnthropicProvider(model=settings.model, api_key="sk-test")
+    governor = BudgetGovernor(settings)
+    request = LLMRequest(system="s", user="u", max_output_tokens=8)
+
+    call_llm(
+        provider,
+        request,
+        cache=None,
+        governor=governor,
+        provider_name="anthropic",
+        model=settings.model,
+        prompt_version="v1",
+        agent="test",
+    )
+    # 1000 out * $15/Mtok + 10 in * $3/Mtok = 0.015 + 0.00003.
+    assert governor.cost_used == pytest.approx(0.01503)
+    with pytest.raises(BudgetExhausted) as exc_info:
+        governor.reserve()
+    assert exc_info.value.reason == "max_usd_per_run"
+
+
 def test_cache_hit_avoids_http_call_entirely(tmp_path: Path, httpx_mock: HTTPXMock) -> None:
     # No httpx_mock.add_response registered: if the provider were ever called,
     # pytest-httpx raises on the unmatched request and this test fails.

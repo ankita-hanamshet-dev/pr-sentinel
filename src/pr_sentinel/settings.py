@@ -3,9 +3,51 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+TriageStrategy = Literal["heuristic", "llm", "hybrid"]
+
+
+class ModelPricing(BaseModel):
+    """Per-model USD rates per 1M tokens (STANDARD published pricing, not promo).
+
+    Cache rates are Anthropic's multipliers on the input rate: read ~=0.1x, write
+    (5-min TTL) ~=1.25x. Used by the budget governor to turn the token ledger into a
+    real dollar hard stop; documentation and demo material must quote these standard
+    rates, since Sonnet's intro pricing expires 2026-08-31.
+    """
+
+    input_per_mtok: float
+    output_per_mtok: float
+    cache_read_per_mtok: float
+    cache_write_per_mtok: float
+
+
+# STANDARD list prices per 1M tokens (Claude API, cached 2026-06-24). Intentionally NOT
+# the promotional Sonnet rate ($2/$10), which lapses 2026-08-31.
+DEFAULT_MODEL_PRICES: dict[str, ModelPricing] = {
+    "claude-sonnet-5": ModelPricing(
+        input_per_mtok=3.00,
+        output_per_mtok=15.00,
+        cache_read_per_mtok=0.30,
+        cache_write_per_mtok=3.75,
+    ),
+    "claude-opus-5": ModelPricing(
+        input_per_mtok=5.00,
+        output_per_mtok=25.00,
+        cache_read_per_mtok=0.50,
+        cache_write_per_mtok=6.25,
+    ),
+    "claude-haiku-4-5": ModelPricing(
+        input_per_mtok=1.00,
+        output_per_mtok=5.00,
+        cache_read_per_mtok=0.10,
+        cache_write_per_mtok=1.25,
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -31,10 +73,23 @@ class Settings(BaseSettings):
     # Budget / token ceilings (CLAUDE.md C2, C3).
     max_input_tokens: int = 8000
     max_output_tokens: int = 4000
+    # Primary hard stop is now dollars, computed from the token ledger at the rates
+    # below (CLAUDE.md C2). Calls remain a secondary cap; the retired GitHub Models
+    # rpm/rpd knobs are kept for that legacy provider but are no longer the governor.
+    max_usd_per_run: float = 1.00
+    model_prices: dict[str, ModelPricing] = Field(
+        default_factory=lambda: dict(DEFAULT_MODEL_PRICES)
+    )
     max_llm_calls_per_run: int = 12
     rpm: int = 15
     rpd: int = 150
     max_concurrency: int = 5
+
+    # Triage strategy (config flag; TriagePlan schema is identical either way):
+    #   heuristic - no model calls; uncertain files get risk="unknown".
+    #   llm       - always run the LLM triage agent.
+    #   hybrid    - heuristic first, LLM refines ONLY the "unknown" files (default).
+    triage_strategy: TriageStrategy = "hybrid"
 
     # Review shaping.
     max_comments: int = 25

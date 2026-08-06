@@ -43,13 +43,20 @@ class LLMRequest:
 
 @dataclass(frozen=True)
 class LLMResponse:
-    """A completion result with usage accounting."""
+    """A completion result with usage accounting.
+
+    `tokens_in` is the uncached input count (Anthropic's `input_tokens`); cached
+    prefix tokens are reported separately so the budget governor can price them at
+    the cache read/write rates rather than the full input rate.
+    """
 
     text: str
     tokens_in: int
     tokens_out: int
     latency_ms: int
     model: str
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 class LLMProvider(Protocol):
@@ -74,7 +81,14 @@ class GovernorLike(Protocol):
 
     def reserve(self) -> None: ...
     def record(
-        self, *, tokens_in: int, tokens_out: int, latency_ms: int, cache_hit: bool
+        self,
+        *,
+        tokens_in: int,
+        tokens_out: int,
+        latency_ms: int,
+        cache_hit: bool,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> None: ...
 
 
@@ -193,6 +207,8 @@ def call_llm(
         tokens_out=raw.tokens_out,
         latency_ms=latency_ms,
         model=raw.model,
+        cache_read_tokens=raw.cache_read_tokens,
+        cache_write_tokens=raw.cache_write_tokens,
     )
 
     if governor is not None:
@@ -201,6 +217,8 @@ def call_llm(
             tokens_out=response.tokens_out,
             latency_ms=response.latency_ms,
             cache_hit=False,
+            cache_read_tokens=response.cache_read_tokens,
+            cache_write_tokens=response.cache_write_tokens,
         )
     if cache is not None:
         cache.put(key, response)

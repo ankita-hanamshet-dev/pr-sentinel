@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, computed_field
 
 Severity = Literal["critical", "high", "medium", "low"]
 AgentName = Literal["bug", "security", "style", "improvement"]
-Risk = Literal["high", "medium", "low"]
+Risk = Literal["high", "medium", "low", "unknown"]
 LineEnding = Literal["lf", "crlf", "mixed", "none"]
 
 SEVERITY_ORDER: dict[str, int] = {"critical": 4, "high": 3, "medium": 2, "low": 1}
