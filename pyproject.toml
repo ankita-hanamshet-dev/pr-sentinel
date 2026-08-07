@@ -27,7 +27,7 @@ dev = [
     "pytest-httpx>=0.30",
     "ruff>=0.6",
     "mypy>=1.11",
-    "types-PyYAML>=6",
+    "types-PyYAML>=6.0.12.20260724",
 ]
 
 [build-system]
