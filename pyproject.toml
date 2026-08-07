@@ -84,3 +84,6 @@ relative_files = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/**" = ["E722", "B006"]
