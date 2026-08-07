@@ -1,0 +1,82 @@
+# PR Sentinel — Analyze (CONSUMER copy). Drop this into .github/workflows/ of ANY repo
+# to get AI code review on its PRs. The tool is fetched on demand with uvx — there is NO
+# checkout of pr-sentinel's source and NO local install; uvx builds and runs it directly.
+# The reviewed repo's own code is never checked out either: extract reads the PR diff
+# over the GitHub REST API.
+#
+# Trust boundary (identical to pr-sentinel's own): this analyze half does NO inference —
+# no model call, no LLM secret, no write permissions — so it is safe on FORK PRs, which
+# GitHub withholds secrets from. All inference lives in pr-review-publish.yml, exactly as
+# it does for pr-sentinel itself. Files the heuristic cannot classify are marked
+# risk="unknown"; the publish side escalates only those to the model.
+#
+# PINNING: `@main` in the uvx URL means THIS repo's review behavior can change whenever
+# pr-sentinel's main branch moves, with no change here. For anything past a demo, pin
+# @main to a release tag or a commit SHA in every `uvx --from` line (there is one below,
+# and several in pr-review-publish.yml). See docs/CROSS_REPO_USAGE.md.
+name: PR Review Analyze
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sentinel-analyze-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # setup-uv provides the uv/uvx binary. No checkout: extract is API-only and uvx
+      # fetches the tool (prompts ship inside that package).
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+      - name: Heuristic triage -> context.json (no model call, no secret)
+        run: |
+          uvx --from "git+https://github.com/ankita-hanamshet-dev/pr-sentinel.git@main" pr-sentinel extract \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --out context.json
+      - name: Derive pr-meta.json (pr_number + head_sha) for the publish side
+        run: |
+          python3 - <<'PY'
+          import json
+          d = json.load(open("context.json"))
+          json.dump({"pr_number": d["pr_number"], "head_sha": d["head_sha"]}, open("pr-meta.json", "w"))
+          PY
+      - name: Step summary
+        if: always()
+        run: |
+          {
+            echo "## PR Sentinel — analyze (heuristic triage)"
+            if [ -f context.json ]; then
+              python3 - <<'PY'
+          import json
+          d = json.load(open("context.json"))
+          files = d["triage"]
+          unknown = sum(1 for f in files if f["risk"] == "unknown")
+          print(f"{len(files)} files triaged, {unknown} unknown (escalated on publish), "
+                f"{len(d['hunks'])} hunks. Inference runs on the publish side.")
+          PY
+            else
+              echo "no context produced"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sentinel-context
+          path: |
+            context.json
+            pr-meta.json
+          retention-days: 14
+          if-no-files-found: error
