@@ -243,3 +243,128 @@ def test_aggregate_fanin_merges_agents_and_errors(
     assert Path("pr-meta.json").exists()
     assert "security" in report["agent_errors"]  # agent error propagated to the report
     assert len(report["findings"]) >= 1  # grounded + critic-kept
+
+
+def test_aggregate_marks_missing_agent_artifact_as_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Belt-and-suspenders for the false 100/100: a specialist that crashes HARD (OOM,
+    timeout, uncaught error) writes no artifact at all. The fan-in must treat each expected
+    artifact's absence as an agent error, not silently skip it and score 100."""
+    monkeypatch.chdir(tmp_path)
+    _link_prompts(tmp_path)
+    monkeypatch.setattr(cli, "get_provider", lambda settings: _ScriptedProvider([]))
+    get_settings.cache_clear()
+
+    hunk = Hunk(
+        file="app/db.py",
+        old_start=1,
+        old_len=2,
+        new_start=1,
+        new_len=3,
+        lines=[" import os", "+import sys", " x = 1"],
+    )
+    Path("context.json").write_text(json.dumps(_context([hunk.model_dump(mode="json")])))
+    # Only the bug specialist produced an artifact (clean, no findings/errors); the other
+    # three crashed before writing anything.
+    Path("agent-bug.json").write_text(
+        json.dumps(
+            {
+                "agent": "bug",
+                "findings": [],
+                "errors": [],
+                "injection_detected": False,
+                "budget_used": 0,
+                "prompt_version": "1",
+            }
+        )
+    )
+    try:
+        cli.aggregate(
+            context="context.json",
+            agent_result=[
+                "agent-bug.json",
+                "agent-security.json",
+                "agent-style.json",
+                "agent-improvement.json",
+            ],
+            out="review-payload.json",
+            provider="",
+        )
+    finally:
+        get_settings.cache_clear()
+
+    report = json.loads(Path("review-payload.json").read_text())
+    for role in ("security", "style", "improvement"):
+        assert role in report["agent_errors"]  # absent artifact surfaced as an error
+    assert "bug" not in report["agent_errors"]  # produced a clean artifact
+    assert report["needs_human_review"] is True  # >= 2 agents errored
+
+
+def test_agent_401_forces_human_review_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    """The exact regression this whole fix exists for, end to end through `agent` ->
+    `aggregate`: a specialist whose model call returns 401 must NOT crash the process
+    silently. Its failure lands in agent_errors, the missing peers surface too, human
+    review is forced, and the Check Run conclusion is NOT `success` (no false 100/100)."""
+    from pr_sentinel.gh.publish import check_run_conclusion
+    from pr_sentinel.models import ReviewReport
+
+    monkeypatch.chdir(tmp_path)
+    _link_prompts(tmp_path)
+    monkeypatch.setenv("PR_SENTINEL_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("PR_SENTINEL_LLM_API_KEY", "sk-rate-limited")
+    get_settings.cache_clear()
+
+    # The bug specialist will call the model on this high-risk hunk; the key is rejected.
+    httpx_mock.add_response(
+        url="https://api.anthropic.com/v1/messages",
+        status_code=401,
+        json={"error": {"type": "authentication_error", "message": "invalid x-api-key"}},
+    )
+    hunk = Hunk(
+        file="app/db.py",
+        old_start=1,
+        old_len=1,
+        new_start=1,
+        new_len=2,
+        lines=[" import os", "+result = eval(payload)"],
+    )
+    ctx = _context([hunk.model_dump(mode="json")])
+    ctx["triage"] = [
+        {
+            "file": "app/db.py",
+            "language": "python",
+            "risk": "high",
+            "agents_to_run": ["bug"],
+            "skip_reason": None,
+        }
+    ]
+    Path("context.json").write_text(json.dumps(ctx))
+
+    try:
+        # Must NOT raise: the 401 is recorded, the artifact is still written.
+        cli.agent(role="bug", context="context.json", provider="", out="agent-bug.json")
+        bug_result = json.loads(Path("agent-bug.json").read_text())
+        assert bug_result["errors"], "the 401 must be recorded in the agent's own errors"
+
+        cli.aggregate(
+            context="context.json",
+            agent_result=[
+                "agent-bug.json",
+                "agent-security.json",
+                "agent-style.json",
+                "agent-improvement.json",
+            ],
+            out="review-payload.json",
+            provider="",
+        )
+    finally:
+        get_settings.cache_clear()
+
+    report = json.loads(Path("review-payload.json").read_text())
+    assert "bug" in report["agent_errors"]  # the 401 propagated (fix #1)
+    assert report["needs_human_review"] is True  # >= 2 agents unaccounted for
+    conclusion = check_run_conclusion(ReviewReport.model_validate(report))
+    assert conclusion != "success"  # never a false green check

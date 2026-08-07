@@ -112,40 +112,51 @@ def request_with_retry(
 
     Honors a `Retry-After` header (seconds) when present; otherwise backs off
     `min(cap, base * 2**attempt)` seconds with jitter. Any non-429 HTTP error
-    status or transport error propagates immediately.
+    status, an exhausted 429, or a transport error is wrapped as LLMError so no raw
+    httpx exception escapes the provider boundary (CLAUDE.md C1). This matters: a
+    specialist's `except LLMError` would otherwise miss a raw httpx error, the agent
+    would crash without writing its result artifact, and the fan-in would silently
+    score a false 100/100 (agent_errors stays empty).
     """
     base_delay = 1.0
     cap_delay = 20.0
     last_response: httpx.Response | None = None
 
-    for attempt in range(max_attempts):
-        try:
-            response = client.request(method, url, headers=headers, json=json_body)
-        except httpx.TransportError:
+    try:
+        for attempt in range(max_attempts):
+            try:
+                response = client.request(method, url, headers=headers, json=json_body)
+            except httpx.TransportError:
+                if attempt == max_attempts - 1:
+                    raise
+                time.sleep(min(cap_delay, base_delay * (2**attempt)))
+                continue
+
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response
+
+            last_response = response
             if attempt == max_attempts - 1:
-                raise
-            time.sleep(min(cap_delay, base_delay * (2**attempt)))
-            continue
+                break
 
-        if response.status_code != 429:
-            response.raise_for_status()
-            return response
+            retry_after = response.headers.get("retry-after")
+            if retry_after is not None:
+                delay = float(retry_after)
+            else:
+                delay = min(cap_delay, base_delay * (2**attempt)) * (0.5 + random.random() * 0.5)
+            logger.info("llm_rate_limited", attempt=attempt, delay_s=delay, url=url)
+            time.sleep(delay)
 
-        last_response = response
-        if attempt == max_attempts - 1:
-            break
-
-        retry_after = response.headers.get("retry-after")
-        if retry_after is not None:
-            delay = float(retry_after)
-        else:
-            delay = min(cap_delay, base_delay * (2**attempt)) * (0.5 + random.random() * 0.5)
-        logger.info("llm_rate_limited", attempt=attempt, delay_s=delay, url=url)
-        time.sleep(delay)
-
-    assert last_response is not None
-    last_response.raise_for_status()
-    return last_response
+        assert last_response is not None
+        last_response.raise_for_status()
+        return last_response
+    except httpx.HTTPStatusError as exc:
+        raise LLMError(f"LLM HTTP {exc.response.status_code} error from {url}: {exc}") from exc
+    except httpx.HTTPError as exc:
+        # Base class of every httpx error (transport, timeout, decoding, protocol) -- the
+        # catch-all that guarantees nothing httpx-shaped leaks past this boundary.
+        raise LLMError(f"LLM request to {url} failed: {exc}") from exc
 
 
 def get_provider(settings: Settings) -> LLMProvider:

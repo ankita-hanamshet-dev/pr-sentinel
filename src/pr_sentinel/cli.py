@@ -577,11 +577,13 @@ def aggregate(
     agent_cost = 0.0
     cache_hits = 0
     cache_writes = 0
+    seen_agents: set[str] = set()
     for path in agent_files:
         fp = Path(path)
         if not fp.exists():
             continue
         result = json.loads(fp.read_text(encoding="utf-8"))
+        seen_agents.add(str(result.get("agent", "")))
         raw_findings.extend(Finding.model_validate(f) for f in result.get("findings", []))
         if result.get("errors"):
             agent_errors[result["agent"]] = "; ".join(result["errors"])
@@ -591,6 +593,14 @@ def aggregate(
         agent_cost += float(result.get("cost_usd", 0.0))
         cache_hits += int(result.get("cache_hits", 0))
         cache_writes += int(result.get("cache_writes", 0))
+
+    # Belt-and-suspenders for the false 100/100: each of the four canonical specialists is
+    # always fanned out as its own Actions job. Any that produced NO artifact at all (a hard
+    # crash -- OOM, timeout, an uncaught error before writing output) must surface as an
+    # agent error; otherwise its silent absence lets the run score a clean 100.
+    for role in _CHUNK_AGENT_CLASSES:
+        if role not in seen_agents and role not in agent_errors:
+            agent_errors[role] = "no result artifact produced (agent crashed before writing output)"
 
     _settings, provider_obj, governor, _run_id, agent_kwargs = _agent_env(provider or None)
     critic_agent = CriticAgent(provider_obj, **agent_kwargs)  # type: ignore[arg-type]

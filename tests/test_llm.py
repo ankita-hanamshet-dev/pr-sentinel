@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from pydantic import BaseModel
 from pytest_httpx import HTTPXMock
@@ -18,7 +19,7 @@ from pr_sentinel.llm.budget import BudgetExhausted, BudgetGovernor
 from pr_sentinel.llm.cache import LLMCache, cache_key
 from pr_sentinel.llm.github_models import GitHubModelsProvider
 from pr_sentinel.llm.json_mode import JsonModeGiveUp, JsonModeSuccess, complete_json
-from pr_sentinel.llm.provider import LLMRequest, LLMResponse, call_llm
+from pr_sentinel.llm.provider import LLMError, LLMRequest, LLMResponse, call_llm
 from pr_sentinel.llm.replay import ReplayNotFound, ReplayProvider, replay_key
 from pr_sentinel.settings import Settings
 
@@ -95,6 +96,41 @@ def test_anthropic_retries_on_429_then_succeeds(httpx_mock: HTTPXMock) -> None:
     assert response.text == "pong"
     assert response.tokens_in == 5
     assert response.tokens_out == 2
+
+
+def test_anthropic_wraps_non_429_http_error_as_llm_error(httpx_mock: HTTPXMock) -> None:
+    """A non-429 HTTP status (e.g. a rate-limited/invalid key -> 401) must surface as
+    LLMError, never a raw httpx.HTTPStatusError. Otherwise a specialist's `except LLMError`
+    misses it, `pr-sentinel agent` crashes without writing its artifact, and the fan-in
+    silently scores a false 100/100. Covers the raise_for_status site for non-429 responses.
+    """
+    httpx_mock.add_response(url=ANTHROPIC_URL, status_code=401, json={"error": "unauthorized"})
+    provider = AnthropicProvider(model="claude-sonnet-5", api_key="sk-bad")
+    with pytest.raises(LLMError):
+        provider.complete(LLMRequest(system="sys", user="ping", max_output_tokens=16))
+
+
+def test_anthropic_wraps_exhausted_429_as_llm_error(httpx_mock: HTTPXMock) -> None:
+    """When retries are exhausted against a persistent 429, the FINAL raise_for_status must
+    also be wrapped as LLMError -- the second raise site inside request_with_retry."""
+    for _ in range(3):
+        httpx_mock.add_response(url=ANTHROPIC_URL, status_code=429, headers={"retry-after": "0"})
+    provider = AnthropicProvider(model="claude-sonnet-5", api_key="sk-test")
+    with pytest.raises(LLMError):
+        provider.complete(LLMRequest(system="sys", user="ping", max_output_tokens=16))
+
+
+def test_anthropic_wraps_transport_error_as_llm_error(
+    httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistent transport error (connection failure) -- the third raise site inside
+    request_with_retry -- must also be wrapped as LLMError, not leak httpx.TransportError."""
+    monkeypatch.setattr("pr_sentinel.llm.provider.time.sleep", lambda *_: None)
+    for _ in range(3):
+        httpx_mock.add_exception(httpx.ConnectError("no route to host"))
+    provider = AnthropicProvider(model="claude-sonnet-5", api_key="sk-test")
+    with pytest.raises(LLMError):
+        provider.complete(LLMRequest(system="sys", user="ping", max_output_tokens=16))
 
 
 def test_github_models_happy_path(httpx_mock: HTTPXMock) -> None:
