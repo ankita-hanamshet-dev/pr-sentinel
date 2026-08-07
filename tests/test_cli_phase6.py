@@ -145,7 +145,9 @@ def test_publish_command_reads_payload_and_posts(
 
 def _link_prompts(tmp_path: Path) -> None:
     """Agents load prompts/ relative to CWD; expose the repo's copy in the temp dir."""
-    (tmp_path / "prompts").symlink_to(Path(__file__).resolve().parent.parent / "prompts")
+    (tmp_path / "prompts").symlink_to(
+        Path(__file__).resolve().parent.parent / "src" / "pr_sentinel" / "prompts"
+    )
 
 
 def _context(hunks: list[dict[str, object]]) -> dict[str, object]:

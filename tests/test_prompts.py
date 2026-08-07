@@ -8,7 +8,12 @@ import pytest
 
 from pr_sentinel.prompts import PromptError, load_prompt, render
 
-REPO_PROMPTS_DIR = Path("prompts")
+REPO_PROMPTS_DIR = Path("src/pr_sentinel/prompts")
+
+_VALID_PROMPT = (
+    "version: '1'\nmessages:\n  - role: system\n    content: sys\n"
+    "  - role: user\n    content: usr\n"
+)
 
 EXPECTED_TEMPERATURES = {
     "triage": 0.0,
@@ -68,9 +73,40 @@ def test_load_prompt_missing_role(tmp_path: Path) -> None:
 
 
 def test_load_prompt_default_temperature(tmp_path: Path) -> None:
-    (tmp_path / "notemp.prompt.yml").write_text(
-        "version: '1'\nmessages:\n  - role: system\n    content: sys\n"
-        "  - role: user\n    content: usr\n"
-    )
+    (tmp_path / "notemp.prompt.yml").write_text(_VALID_PROMPT)
     spec = load_prompt("notemp", base_dir=tmp_path)
     assert spec.temperature == 0.0
+
+
+def test_resolution_package_fallback_from_empty_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The exact scenario uvx hits: no ./prompts in CWD and no env override, so the
+    # loader MUST resolve the packaged prompts via importlib.resources. This proves
+    # the .prompt.yml files ship inside the installed package.
+    monkeypatch.delenv("PR_SENTINEL_PROMPTS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert not (tmp_path / "prompts").exists()
+    spec = load_prompt("bug")  # no base_dir -> full resolution order
+    assert spec.name == "bug"
+    assert spec.version == "1"
+    assert spec.system_template.strip() != ""
+
+
+def test_resolution_env_var_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A prompt name that exists ONLY in the env dir resolves, proving env is consulted.
+    (tmp_path / "envonly.prompt.yml").write_text(_VALID_PROMPT)
+    monkeypatch.setenv("PR_SENTINEL_PROMPTS_DIR", str(tmp_path))
+    spec = load_prompt("envonly")
+    assert spec.system_template == "sys"
+
+
+def test_resolution_cwd_prompts_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A prompt name present only under ./prompts resolves via the CWD branch.
+    monkeypatch.delenv("PR_SENTINEL_PROMPTS_DIR", raising=False)
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "cwdonly.prompt.yml").write_text(_VALID_PROMPT)
+    monkeypatch.chdir(tmp_path)
+    spec = load_prompt("cwdonly")
+    assert spec.system_template == "sys"

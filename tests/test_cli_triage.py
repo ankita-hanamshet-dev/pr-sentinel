@@ -94,7 +94,9 @@ def test_refine_hybrid_escalates_only_unknown_files(
         }
     )
     monkeypatch.setattr(cli, "get_provider", lambda settings: _ScriptedProvider([refined]))
-    (tmp_path / "prompts").symlink_to(Path(__file__).resolve().parent.parent / "prompts")
+    (tmp_path / "prompts").symlink_to(
+        Path(__file__).resolve().parent.parent / "src" / "pr_sentinel" / "prompts"
+    )
 
     context = {
         "pr_number": 7,
