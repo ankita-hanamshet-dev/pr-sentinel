@@ -76,6 +76,46 @@ line — there are **7** of them (**1** in `pr-review-analyze.yml`, **6** in
 Bump the pin deliberately (e.g. via Dependabot on the git ref, or a scheduled review) so
 upgrades are a reviewed change, not a surprise.
 
+## Verify the review actually ran
+
+On the PR's **Checks** / **Actions** tab you should see, in order:
+
+1. **PR Review Analyze** (`pull_request`) — completes in seconds. Its log shows heuristic
+   triage only: a line like `wrote context.json: N files triaged (0 unknown), N hunks`, and
+   **no** reference to `PR_SENTINEL_LLM_API_KEY` and no call to `api.anthropic.com`. That is
+   expected — inference does not run on this side.
+2. **PR Review Publish** (`workflow_run`) — posts an in-progress **`PR Sentinel`** Check Run
+   within seconds, then (typically 2–3 min) the full review: inline comments, a sticky
+   summary comment (marked `<!-- pr-sentinel:summary -->`), and the final Check Run.
+
+The final Check Run conclusion tells you what happened at a glance:
+
+| Conclusion | Meaning |
+|---|---|
+| **success** (green) | reviewed, no findings and no escalation |
+| **neutral** | reviewed with findings, or human review requested, but nothing critical |
+| **failure** | a **critical** finding exists (e.g. SQL injection, hardcoded secret) |
+
+The publish job's **step summary** prints the run's real USD cost (at standard $3/$15 per-1M
+rates), the cache hit/write counts, and `agent_errors`.
+
+## Troubleshooting
+
+- **Publish never runs after Analyze.** The `workflow_run` trigger binds by workflow *name*.
+  Confirm the `name:` fields are exactly `PR Review Analyze` and `PR Review Publish` and that
+  the filenames were kept. A mismatch fails silently with no error.
+- **`neutral` Check Run with "Human review: required" and 0 findings on obviously buggy
+  code.** A specialist could not reach the model — almost always a missing, invalid, or
+  rate-limited `PR_SENTINEL_LLM_API_KEY`. Open the publish run and check `agent_errors` in the
+  step summary / per-agent artifacts; a `LLM HTTP 401` there means the key is bad or over its
+  limit. (By design this surfaces as human-review-required, **never** as a false green
+  `100/100` — a failed run is always visible.)
+- **Secrets are per-repository.** Setting the key on one repo does **not** cover another.
+  Each consuming repo needs its own `PR_SENTINEL_LLM_API_KEY`. Re-run after adding it by
+  pushing any commit to the PR branch (or re-running the Analyze workflow).
+- **Fork PR shows Analyze but no findings from Analyze.** Correct and expected — Analyze is
+  heuristic-only and secretless; the review is posted by Publish from the base-repo context.
+
 ## Notes
 
 - **Cost.** Each run is bounded by `PR_SENTINEL_MAX_USD_PER_RUN` (default `$1.00`) and the
