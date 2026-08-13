@@ -12,7 +12,7 @@ dependencies = [
     "structlog>=24",
     "tiktoken>=0.7",
     "rank-bm25>=0.2",
-    "langgraph>=0.2",
+    "langgraph>=1.2.10",
     "pyyaml>=6",
     "rapidfuzz>=3",
 ]
