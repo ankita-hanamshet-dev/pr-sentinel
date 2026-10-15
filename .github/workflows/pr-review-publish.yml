@@ -94,7 +94,7 @@ jobs:
         env:
           PR_SENTINEL_LLM_API_KEY: ${{ secrets.PR_SENTINEL_LLM_API_KEY }}
         run: uv run pr-sentinel refine --context context.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sentinel-context-refined
           path: |
@@ -137,7 +137,7 @@ jobs:
             --role "${{ matrix.role }}" \
             --context context.json \
             --out "agent-${{ matrix.role }}.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: sentinel-agent-${{ matrix.role }}
